@@ -61,6 +61,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   shellEnv: 'shell.md',
   clientModules: 'client-modules.md',
   codeRuntime: 'code-runtime.md',
+  codexImageProxy: 'web-server.md',
   commands: 'commands.md',
   compaction: 'compaction.md',
   cordisInspect: 'extensions.md',
@@ -565,6 +566,8 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   WebUpgradeRoute:
     'upgrade route registration contract is owned by packages/host/webserver/src/index.ts',
   InvariantRegistration: 'service-local lifecycle handle is owned by packages/runtime-diagnostics/invariants/README.md',
+  ImageGenerationRequest: 'service-local queue request is owned by packages/image/codex-image-proxy/README.md',
+  ImageProxyResult: 'service-local generation result is owned by packages/image/codex-image-proxy/README.md',
   JsonValue: 'JSON value union is owned by packages/core/session/src/json.ts',
   KnobState: 'projection unit state fields are owned by packages/interaction/permission-presets/README.md',
   PermissionSelect: 'permissions projection payload is owned by packages/interaction/permission-presets/src/types.ts',

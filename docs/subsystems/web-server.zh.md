@@ -54,6 +54,24 @@ interface Config {
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — this section is byte-identical in both language sides of the page. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxcodeximageproxy--codeximageproxy"></a>
+
+### `ctx.codexImageProxy` — `CodexImageProxy`
+
+Host service owning the shared queue and the browser image route.
+
+```ts cordis-catalog
+/**
+ * Enqueue one bounded model request and wait for the authenticated worker's durable result.
+ * @param input - Complete visual prompt and bounded relevant context.
+ * @param signal - Caller cancellation propagated through durable cancellation markers.
+ * @returns A generated image reference, offline status, or bounded failure.
+ */
+async generate(input: ImageGenerationRequest, signal: AbortSignal): Promise<ImageProxyResult>
+```
+
+Source: [`packages/image/codex-image-proxy/src/index.ts:427`](../../packages/image/codex-image-proxy/src/index.ts)
+
 <a id="ctxwebserver--webserver"></a>
 
 ### `ctx.webServer` — `WebServer`

@@ -408,6 +408,10 @@ class TenantManager {
       '--host', '127.0.0.1', '--port', '0',
     ]
     const env = { ...process.env }
+    // Product plugins that keep shared host-side queues still need one stable
+    // non-secret namespace per isolated child. The value is either "default"
+    // or the launcher's SHA-256 directory key; never the user's identifier.
+    env.DSH_TENANT_KEY = layout.key
     if (layout.home !== undefined && layout.dshHome !== undefined) {
       env.HOME = layout.home
       env.USERPROFILE = layout.home

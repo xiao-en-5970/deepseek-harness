@@ -119,6 +119,19 @@
         host: !!js ctx.webStartup.host ?? '127.0.0.1'
         port: !!js ctx.webStartup.port ?? 3080
 
+    # Browser-only text-to-image proxy. The sandbox process writes a durable,
+    # tenant-keyed request; an independently authenticated local worker claims
+    # it through `bohr sandbox`, runs Codex `$imagegen`, and uploads the result.
+    # No Codex credential or OpenAI key crosses into this process.
+    - id: codex-image-proxy
+      name: '@deepseek-ai/dsh-codex-image-proxy'
+      config:
+        queueRoot: !!js process.env.DSH_CODEX_IMAGE_QUEUE_ROOT
+        tenantKey: !!js process.env.DSH_TENANT_KEY ?? 'default'
+        publicBaseUrl: !!js process.env.DSH_CODEX_IMAGE_PUBLIC_BASE_URL ?? ''
+        workerFreshnessMs: 35000
+        requestTimeoutMs: 600000
+
     # Web glue owned by this bundle: resolves the built frontend dist (an
     # assembly fact of dsh-web-app, never user config), mounts the
     # frontend-static fallback owner, registers the web-surface prompt

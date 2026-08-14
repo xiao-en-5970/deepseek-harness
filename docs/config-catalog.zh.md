@@ -467,6 +467,34 @@ export interface Config {
 
 来源：[`packages/code-runtime/code-runtime-worker-thread/src/index.ts:25`](../packages/code-runtime/code-runtime-worker-thread/src/index.ts)
 
+<a id="deepseek-aidsh-codex-image-proxy"></a>
+
+## `@deepseek-ai/dsh-codex-image-proxy`
+
+需要：`webServer`
+
+```ts config-catalog
+/** Deployment configuration for the queue, browser URL, and bounded waits. */
+export interface Config {
+  /** Shared absolute queue root; omitted uses this process's DSH_HOME. */
+  queueRoot?: string
+  /** Stable tenant directory key supplied by the tenant launcher. */
+  tenantKey?: string
+  /** Browser-visible HTTP(S) origin used in the generated Markdown URL. */
+  publicBaseUrl?: string
+  /** Maximum age of the local worker heartbeat. */
+  workerFreshnessMs?: number
+  /** Interval between durable result probes. */
+  resultPollIntervalMs?: number
+  /** Maximum duration of one generation request. */
+  requestTimeoutMs?: number
+  /** Maximum accepted generated-image bytes. */
+  maxImageBytes?: number
+}
+```
+
+来源：[`packages/image/codex-image-proxy/src/index.ts:48`](../packages/image/codex-image-proxy/src/index.ts)
+
 <a id="deepseek-aidsh-compaction-basic"></a>
 
 ## `@deepseek-ai/dsh-compaction-basic`
@@ -2407,6 +2435,24 @@ export interface Config {
 ```
 
 来源：[`packages/shell/tool-bash-persistent/src/index.ts:405`](../packages/shell/tool-bash-persistent/src/index.ts)
+
+<a id="deepseek-aidsh-tool-codex-image-proxy"></a>
+
+## `@deepseek-ai/dsh-tool-codex-image-proxy`
+
+需要：`codexImageProxy` · `tools` · `systemPrompt`
+
+```ts config-catalog
+/** Model-bound argument limits; queue and worker policy belong to the host seam. */
+export interface Config {
+  /** Maximum Unicode characters accepted in the complete visual prompt. */
+  maxPromptChars?: number
+  /** Maximum Unicode characters accepted in the relevant context summary. */
+  maxContextChars?: number
+}
+```
+
+来源：[`packages/image/tool-codex-image-proxy/src/index.ts:22`](../packages/image/tool-codex-image-proxy/src/index.ts)
 
 <a id="deepseek-aidsh-tool-fs"></a>
 

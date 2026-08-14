@@ -439,6 +439,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'codexImageProxy',
+    summary: 'Host service owning the shared queue and the browser image route.',
+    description: 'Host service owning the shared queue and the browser image route.',
+    methods: [
+      {
+        signature: 'async generate(input: ImageGenerationRequest, signal: AbortSignal): Promise<ImageProxyResult>',
+        description: 'Enqueue one bounded model request and wait for the authenticated worker\'s durable result.',
+        parameters: [{ name: 'input', description: 'Complete visual prompt and bounded relevant context.' }, { name: 'signal', description: 'Caller cancellation propagated through durable cancellation markers.' }],
+        returns: 'A generated image reference, offline status, or bounded failure.',
+      },
+    ],
+  },
+  {
     key: 'commands',
     summary: 'Human-command registry.',
     description: 'Human-command registry. Plain-context definitions are global; definitions registered through a command-injected child of an agent context shadow globals for that agent.',
@@ -3146,8 +3159,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ImageBlock {\n    type: \'image\';\n    attachment: ImageAttachmentRef;\n}',
   },
   {
+    name: 'ImageGenerationRequest',
+    declaration: 'export interface ImageGenerationRequest {\n    prompt: string;\n    context: string;\n}',
+  },
+  {
     name: 'ImageMediaType',
     declaration: 'export type ImageMediaType = \'image/png\' | \'image/jpeg\' | \'image/webp\' | \'image/gif\';',
+  },
+  {
+    name: 'ImageProxyResult',
+    declaration: 'export type ImageProxyResult = {\n    status: \'generated\';\n    requestId: string;\n    imageUrl: string;\n    imagePath: string;\n    mimeType: ImageMimeType;\n    bytes: number;\n    sha256: string;\n} | {\n    status: \'offline\' | \'failed\';\n    requestId: string;\n    message: string;\n};',
   },
   {
     name: 'Inbox',

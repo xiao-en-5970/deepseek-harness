@@ -238,6 +238,9 @@
     fetch: false
     searchTimeoutMs: 60000
 
+- id: tool-codex-image-proxy
+  name: '@deepseek-ai/dsh-tool-codex-image-proxy'
+
 # ── self-modification ───────────────────────────────────────────────────────
 
 # Read the live runtime, mount a temporary plugin, unmount it. The toolset is a

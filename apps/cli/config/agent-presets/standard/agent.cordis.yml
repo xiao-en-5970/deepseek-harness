@@ -249,3 +249,8 @@
   config:
     fetch: false
     searchTimeoutMs: 60000
+
+# The queue and browser route are host-owned; this per-session consumer keeps
+# the model-visible capability scoped to the selected agent preset.
+- id: tool-codex-image-proxy
+  name: '@deepseek-ai/dsh-tool-codex-image-proxy'

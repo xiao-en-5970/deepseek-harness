@@ -41,6 +41,7 @@ import * as SkillFileSystem from '@deepseek-ai/dsh-skill-filesystem'
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import * as ToolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
+import * as ToolCodexImageProxy from '@deepseek-ai/dsh-tool-codex-image-proxy'
 import * as ToolPwsh from '@deepseek-ai/dsh-tool-pwsh'
 import * as ToolBashPersistent from '@deepseek-ai/dsh-tool-bash-persistent'
 import CordisHostRunner from '@deepseek-ai/dsh-cordis-host-runner'
@@ -253,6 +254,22 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     note:
       'The pwsh tool is the PowerShell-dialect consumer of the bash executor seam for Windows compositions (a PowerShell executor such as `@deepseek-ai/dsh-pwsh-local` backs `ctx.shell`); it mirrors the bash tool call-for-call minus sandbox controls — `run_in_background` runs register with the generic `ctx.jobs` runtime and are collected/stopped through the `job_*` tools, and the managed `DSH_*` environment comes from `@deepseek-ai/dsh-shell-env`. Each call runs in a fresh process (no persistent PTY session), with native `C:\\...` paths and `$env:NAME` variables.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-tool-codex-image-proxy',
+    dir: 'tool-codex-image-proxy',
+    source: 'packages/image/tool-codex-image-proxy/src/index.ts',
+    requires: ['ctx.tools', 'ctx.systemPrompt', 'ctx.codexImageProxy'],
+    writes: ['tool/call', 'durable image-generation queue request', 'tool/result'],
+    async mount(ctx) {
+      ctx.provide('codexImageProxy', {
+        requestTimeoutMs: 600_000,
+        generate: () => Promise.reject(new Error('tool catalog does not execute image generation')),
+      } as never)
+      await ctx.plugin(ToolCodexImageProxy)
+    },
+    note:
+      'The Web host owns the durable queue and same-origin image route once; per-agent instances register only the model-facing consumer. A fresh local worker heartbeat is required before a request is published.',
   },
   {
     pkg: '@deepseek-ai/dsh-tool-cordis',
