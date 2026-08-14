@@ -349,6 +349,39 @@ describe('WorkspaceRuntime', () => {
     await expect(workspaces.createDirectory('/home/u', 'fresh')).rejects.toMatchObject({ rpcError: { code: 'directory-exists' } })
   })
 
+  it('passes the directory-upload transaction through and wraps upload failures', async () => {
+    const ctx = new Context()
+    const api = new FakeApiClient()
+    const workspaces = new WorkspaceRuntime(ctx, api, new SessionRuntime(ctx, api, fakeRemote()))
+    const uploadId = '00000000-0000-4000-8000-000000000001'
+    api.onBeginDirectoryUpload = () => Promise.resolve(ok({
+      uploadId, path: '/home/u/local', maxChunkBytes: 1024,
+    }))
+    await expect(workspaces.beginDirectoryUpload({
+      parentPath: '/home/u', name: 'local', fileCount: 1, totalBytes: 2,
+    })).resolves.toEqual({ uploadId, path: '/home/u/local', maxChunkBytes: 1024 })
+    api.onWriteDirectoryUpload = () => Promise.resolve(ok({ offset: 2 }))
+    await expect(workspaces.writeDirectoryUpload({
+      uploadId, path: 'a.txt', offset: 0, data: 'aGk=', done: true,
+    })).resolves.toBe(2)
+    api.onCompleteDirectoryUpload = () => Promise.resolve(ok({ path: '/home/u/local' }))
+    await expect(workspaces.completeDirectoryUpload(uploadId)).resolves.toBe('/home/u/local')
+    await expect(workspaces.abortDirectoryUpload(uploadId)).resolves.toBeUndefined()
+    expect(api.callsOf('host.beginDirectoryUpload')).toEqual([{
+      parentPath: '/home/u', name: 'local', fileCount: 1, totalBytes: 2,
+    }])
+    expect(api.callsOf('host.writeDirectoryUpload')).toHaveLength(1)
+    expect(api.callsOf('host.completeDirectoryUpload')).toEqual([{ uploadId }])
+    expect(api.callsOf('host.abortDirectoryUpload')).toEqual([{ uploadId }])
+
+    api.onBeginDirectoryUpload = () => Promise.resolve(err({
+      code: 'directory-upload-failed', message: 'outside upload root', details: { path: '/tmp' },
+    }))
+    await expect(workspaces.beginDirectoryUpload({
+      parentPath: '/tmp', name: 'local', fileCount: 1, totalBytes: 0,
+    })).rejects.toBeInstanceOf(DirectoryBrowseError)
+  })
+
   it('opens a filesystem path through the host without local state', async () => {
     const ctx = new Context()
     const api = new FakeApiClient()

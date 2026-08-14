@@ -63,6 +63,50 @@ export const hostCreateDirectoryRequestSchema = z.object({
 export const hostCreateDirectoryValueSchema = z.object({
   path: z.string(),
 }) satisfies z.ZodType<Wire<ResponseValue<'host.createDirectory'>>>
+
+/** host.beginDirectoryUpload request: one root plus manifest totals. */
+export const hostBeginDirectoryUploadRequestSchema = z.object({
+  parentPath: z.string().min(1),
+  name: z.string().min(1),
+  fileCount: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  totalBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+}) satisfies z.ZodType<Wire<RequestPayload<'host.beginDirectoryUpload'>>>
+
+/** host.beginDirectoryUpload response: opaque identity, root path, and chunk bound. */
+export const hostBeginDirectoryUploadValueSchema = z.object({
+  uploadId: z.uuid(),
+  path: z.string(),
+  maxChunkBytes: z.number().int().positive(),
+}) satisfies z.ZodType<Wire<ResponseValue<'host.beginDirectoryUpload'>>>
+
+/** Canonical standard-base64, allowing the empty terminal chunk for an empty file. */
+const canonicalBase64Schema = z.string().regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+
+/** host.writeDirectoryUpload request: one ordered chunk of one relative file. */
+export const hostWriteDirectoryUploadRequestSchema = z.object({
+  uploadId: z.uuid(),
+  path: z.string().min(1).max(4096),
+  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  data: canonicalBase64Schema,
+  done: z.boolean(),
+}) satisfies z.ZodType<Wire<RequestPayload<'host.writeDirectoryUpload'>>>
+
+/** host.writeDirectoryUpload response: next acknowledged offset. */
+export const hostWriteDirectoryUploadValueSchema = z.object({
+  offset: z.number().int().nonnegative(),
+}) satisfies z.ZodType<Wire<ResponseValue<'host.writeDirectoryUpload'>>>
+
+/** Upload-id-only request shared by complete and abort. */
+const directoryUploadIdSchema = z.object({ uploadId: z.uuid() })
+
+/** host.completeDirectoryUpload request: the active upload identity. */
+export const hostCompleteDirectoryUploadRequestSchema = directoryUploadIdSchema satisfies z.ZodType<Wire<RequestPayload<'host.completeDirectoryUpload'>>>
+/** host.completeDirectoryUpload response: the atomically published root. */
+export const hostCompleteDirectoryUploadValueSchema = z.object({ path: z.string() }) satisfies z.ZodType<Wire<ResponseValue<'host.completeDirectoryUpload'>>>
+/** host.abortDirectoryUpload request: the active or already-retired upload identity. */
+export const hostAbortDirectoryUploadRequestSchema = directoryUploadIdSchema satisfies z.ZodType<Wire<RequestPayload<'host.abortDirectoryUpload'>>>
+/** host.abortDirectoryUpload response: idempotent cleanup acknowledgement. */
+export const hostAbortDirectoryUploadValueSchema = z.object({ aborted: z.literal(true) }) satisfies z.ZodType<Wire<ResponseValue<'host.abortDirectoryUpload'>>>
 /** host.openPath request payload. */
 export const hostOpenPathRequestSchema = z.object({
   path: z.string().min(1),

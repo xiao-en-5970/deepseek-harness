@@ -6,7 +6,10 @@
  * the concrete class. Widening this interface is the explicit act of
  * widening what features may do to the workspaces domain.
  */
-import type { DirectoryListing, SessionId, WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type {
+  DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart,
+  SessionId, WorkspaceId, WorkspaceView,
+} from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceListState } from '../workspaces/service.ts'
 import type { ObservableSnapshot } from './store.ts'
 
@@ -53,6 +56,14 @@ export interface IWorkspaces {
    * @returns the created directory's absolute path.
    */
   createDirectory(path: string, name: string): Promise<string>
+  /** Begin one bounded browser-to-host directory upload. */
+  beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession>
+  /** Append one ordered chunk and return the next acknowledged byte offset. */
+  writeDirectoryUpload(input: DirectoryUploadChunk): Promise<number>
+  /** Commit a complete directory upload and return its absolute root. */
+  completeDirectoryUpload(uploadId: string): Promise<string>
+  /** Remove an incomplete directory upload; unknown ids are an idempotent no-op. */
+  abortDirectoryUpload(uploadId: string): Promise<void>
   /**
    * Open a filesystem path with the Host operating system's default application.
    * @param path - absolute or host-resolvable path.

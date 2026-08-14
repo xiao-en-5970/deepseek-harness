@@ -1,7 +1,8 @@
 /** Test-owned workspaces face: the renderer standard-kit observable plus recorded actions. */
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type {
-  DirectoryListing, IWorkspaces, SessionId, SnapshotStore, WorkspaceId, WorkspaceListState, WorkspaceView,
+  DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart, IWorkspaces,
+  SessionId, SnapshotStore, WorkspaceId, WorkspaceListState, WorkspaceView,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { workspaceListState } from './fixtures.ts'
 import type { Stabilizer } from './fixtures.ts'
@@ -148,6 +149,56 @@ export class TestWorkspaces implements IWorkspaces {
     const stub = this.stubs.get('createDirectory')
     if (stub !== undefined) return await (stub(path, name) as Promise<string>)
     return `${path}/${name}`
+  }
+
+  /**
+   * Begin a browser directory upload (recorded). The default returns one
+   * deterministic upload session rooted below the requested parent.
+   * @param input - Parent path, directory name, and manifest totals.
+   * @returns the deterministic test upload session.
+   */
+  async beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession> {
+    this.calls.push({ method: 'beginDirectoryUpload', args: [input] })
+    const stub = this.stubs.get('beginDirectoryUpload')
+    if (stub !== undefined) return await (stub(input) as Promise<DirectoryUploadSession>)
+    return {
+      uploadId: '00000000-0000-4000-8000-000000000001',
+      path: `${input.parentPath}/${input.name}`,
+      maxChunkBytes: 1024 * 1024,
+    }
+  }
+
+  /**
+   * Append one browser directory upload chunk (recorded).
+   * @param input - Ordered upload chunk.
+   * @returns the next acknowledged offset.
+   */
+  async writeDirectoryUpload(input: DirectoryUploadChunk): Promise<number> {
+    this.calls.push({ method: 'writeDirectoryUpload', args: [input] })
+    const stub = this.stubs.get('writeDirectoryUpload')
+    if (stub !== undefined) return await (stub(input) as Promise<number>)
+    return input.offset + (input.data === '' ? 0 : atob(input.data).length)
+  }
+
+  /**
+   * Complete a browser directory upload (recorded).
+   * @param uploadId - Active upload identity.
+   * @returns the deterministic published root.
+   */
+  async completeDirectoryUpload(uploadId: string): Promise<string> {
+    this.calls.push({ method: 'completeDirectoryUpload', args: [uploadId] })
+    const stub = this.stubs.get('completeDirectoryUpload')
+    if (stub !== undefined) return await (stub(uploadId) as Promise<string>)
+    return '/home/test/uploaded-project'
+  }
+
+  /**
+   * Abort a browser directory upload (recorded; default no-op).
+   * @param uploadId - Active or already-retired upload identity.
+   */
+  async abortDirectoryUpload(uploadId: string): Promise<void> {
+    this.calls.push({ method: 'abortDirectoryUpload', args: [uploadId] })
+    await (this.stubs.get('abortDirectoryUpload')?.(uploadId) as Promise<void> | undefined)
   }
 
   /**

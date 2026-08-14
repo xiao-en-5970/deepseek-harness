@@ -32,6 +32,30 @@ export interface DirectoryListing {
   truncated: boolean
 }
 
+/** Manifest totals and destination for one browser-to-host directory upload. */
+export interface DirectoryUploadStart {
+  parentPath: string
+  name: string
+  fileCount: number
+  totalBytes: number
+}
+
+/** Server-owned upload identity and its decoded chunk-size bound. */
+export interface DirectoryUploadSession {
+  uploadId: string
+  path: string
+  maxChunkBytes: number
+}
+
+/** One ordered base64 file chunk; path is slash-separated and relative to the upload root. */
+export interface DirectoryUploadChunk {
+  uploadId: string
+  path: string
+  offset: number
+  data: string
+  done: boolean
+}
+
 /** Host-level unary methods. */
 export interface HostApi {
   /**
@@ -82,6 +106,26 @@ export interface HostApi {
   createDirectory(
     request: RpcRequest<{ path: string; name: string }>,
   ): Promise<RpcResponse<{ path: string }>>
+
+  /** Create an isolated root and begin one bounded local-directory upload. */
+  beginDirectoryUpload(
+    request: RpcRequest<DirectoryUploadStart>,
+  ): Promise<RpcResponse<DirectoryUploadSession>>
+
+  /** Append one ordered chunk to a file in an active directory upload. */
+  writeDirectoryUpload(
+    request: RpcRequest<DirectoryUploadChunk>,
+  ): Promise<RpcResponse<{ offset: number }>>
+
+  /** Publish an upload only after its declared file and byte totals match. */
+  completeDirectoryUpload(
+    request: RpcRequest<{ uploadId: string }>,
+  ): Promise<RpcResponse<{ path: string }>>
+
+  /** Remove an incomplete upload; the operation is idempotent for unknown ids. */
+  abortDirectoryUpload(
+    request: RpcRequest<{ uploadId: string }>,
+  ): Promise<RpcResponse<{ aborted: true }>>
 
   /**
    * Open a filesystem path with the operating system's default application

@@ -1,6 +1,6 @@
 /** Behavior of the browse backend over a real temporary directory tree. */
 
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -59,7 +59,7 @@ describe('BrowseDirectoryPicker', () => {
 
   it('cuts a level at maxEntries keeping the name-sorted head, and flags the cut', async () => {
     const ctx = new Context()
-    const fiber = ctx.plugin(BrowseDirectoryPicker, { maxEntries: 1 })
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({ maxEntries: 1 }))
     await fiber.await()
     const bounded = ctx.get('directoryPicker')!.capability()
     if (bounded.kind !== 'browse') throw new Error('browse backend must advertise the browse capability')
@@ -166,6 +166,62 @@ describe('BrowseDirectoryPicker', () => {
     expect(listing.path).toBe(homedir())
   })
 
+  it('confines listing, creation, and default uploads to a configured browse root', async () => {
+    const browseRoot = join(root, 'projects')
+    const canonicalRoot = await realpath(browseRoot)
+    await symlink(root, join(browseRoot, 'escape-link'), 'junction')
+    const ctx = new Context()
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({ maxEntries: 1000, browseRoot }))
+    await fiber.await()
+    const confined = ctx.get('directoryPicker')!.capability()
+    if (confined.kind !== 'browse') throw new Error('browse backend must advertise the browse capability')
+    try {
+      const home = await confined.list()
+      expect(home.home).toBe(canonicalRoot)
+      expect(home.path).toBe(canonicalRoot)
+      expect(home.crumbs.map(crumb => crumb.path)).toEqual([canonicalRoot])
+      await expect(confined.list(root)).rejects.toMatchObject({ code: 'directory-unreadable' })
+      await expect(confined.list(join(browseRoot, 'escape-link'))).rejects.toMatchObject({ code: 'directory-unreadable' })
+      await expect(confined.createDirectory(root, 'outside')).rejects.toMatchObject({ code: 'directory-create-failed' })
+      await expect(confined.beginDirectoryUpload({
+        parentPath: root, name: 'outside-upload', fileCount: 1, totalBytes: 1,
+      })).rejects.toMatchObject({ code: 'directory-upload-failed' })
+      await expect(confined.createDirectory(browseRoot, 'inside')).resolves.toBe(join(canonicalRoot, 'inside'))
+    } finally {
+      await fiber.dispose()
+    }
+  })
+
+  it('rejects a relative browse root during activation', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({ maxEntries: 1000, browseRoot: 'relative' }))
+    await expect(fiber.await()).rejects.toThrow('directory browse root must be fully qualified')
+    await fiber.dispose()
+  })
+
+  it('defaults decoded upload chunks below a one-mebibyte JSON transport body', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({
+      maxEntries: 1000,
+      uploadRoot: root,
+    }))
+    await fiber.await()
+    const uploader = ctx.get('directoryPicker')!.capability()
+    if (uploader.kind !== 'browse') throw new Error('browse backend must advertise the browse capability')
+    try {
+      const session = await uploader.beginDirectoryUpload({
+        parentPath: root, name: 'default-chunk-upload', fileCount: 1, totalBytes: 1,
+      })
+      expect(session.maxChunkBytes).toBe(512 * 1024)
+      // Base64 stays near 683 KiB, leaving the remainder of a 1 MiB request
+      // for the RPC envelope and file metadata.
+      expect(Math.ceil(session.maxChunkBytes / 3) * 4).toBeLessThan(700 * 1024)
+      await uploader.abortDirectoryUpload(session.uploadId)
+    } finally {
+      await fiber.dispose()
+    }
+  })
+
   it('throws directory-unreadable for a missing target', async () => {
     const missing = join(root, 'no-such-dir')
     const failure = await capability.list(missing).catch((error: unknown) => error)
@@ -227,5 +283,113 @@ describe('BrowseDirectoryPicker', () => {
     // Missing parent is a real failure, not a level to invent.
     const missingParent = await capability.createDirectory(join(root, 'no-such-dir'), 'child').catch((error: unknown) => error)
     expect((missingParent as DirectoryPickerError).code).toBe('directory-create-failed')
+  })
+
+  it('uploads nested files in bounded chunks and publishes only completed files', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({
+      maxEntries: 1000,
+      uploadRoot: root,
+      maxUploadChunkBytes: 2,
+      maxUploadFileBytes: 8,
+      maxUploadBytes: 8,
+      maxUploadFiles: 3,
+    }))
+    await fiber.await()
+    const uploader = ctx.get('directoryPicker')!.capability()
+    if (uploader.kind !== 'browse') throw new Error('browse backend must advertise the browse capability')
+    try {
+      const session = await uploader.beginDirectoryUpload({
+        parentPath: root, name: 'browser-upload', fileCount: 2, totalBytes: 5,
+      })
+      expect(session.maxChunkBytes).toBe(2)
+      await expect(uploader.writeDirectoryUpload({
+        uploadId: session.uploadId, path: 'src/main.txt', offset: 0,
+        data: Buffer.from('he').toString('base64'), done: false,
+      })).resolves.toEqual({ offset: 2 })
+      // The target stays absent until the terminal chunk publishes it.
+      await expect(stat(session.path)).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(uploader.writeDirectoryUpload({
+        uploadId: session.uploadId, path: 'src/main.txt', offset: 2,
+        data: Buffer.from('ll').toString('base64'), done: false,
+      })).resolves.toEqual({ offset: 4 })
+      await expect(uploader.writeDirectoryUpload({
+        uploadId: session.uploadId, path: 'src/main.txt', offset: 4,
+        data: Buffer.from('o').toString('base64'), done: true,
+      })).resolves.toEqual({ offset: 5 })
+      await uploader.writeDirectoryUpload({
+        uploadId: session.uploadId, path: 'empty.txt', offset: 0, data: '', done: true,
+      })
+      await expect(uploader.completeDirectoryUpload(session.uploadId)).resolves.toBe(session.path)
+      await expect(readFile(join(session.path, 'src', 'main.txt'), 'utf8')).resolves.toBe('hello')
+      await expect(readFile(join(session.path, 'empty.txt'))).resolves.toHaveLength(0)
+    } finally {
+      await fiber.dispose()
+    }
+  })
+
+  it('rejects traversal, unordered or oversized chunks and abort removes the isolated root', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({
+      maxEntries: 1000,
+      uploadRoot: root,
+      maxUploadChunkBytes: 2,
+      maxUploadFileBytes: 3,
+      maxUploadBytes: 4,
+      maxUploadFiles: 1,
+    }))
+    await fiber.await()
+    const uploader = ctx.get('directoryPicker')!.capability()
+    if (uploader.kind !== 'browse') throw new Error('browse backend must advertise the browse capability')
+    try {
+      const session = await uploader.beginDirectoryUpload({
+        parentPath: root, name: 'rejected-upload', fileCount: 1, totalBytes: 3,
+      })
+      for (const input of [
+        { path: '../escape.txt', offset: 0, data: Buffer.from('a').toString('base64'), done: true },
+        { path: 'file.txt', offset: 1, data: Buffer.from('a').toString('base64'), done: false },
+        { path: 'file.txt', offset: 0, data: Buffer.from('abc').toString('base64'), done: true },
+      ]) {
+        await expect(uploader.writeDirectoryUpload({ uploadId: session.uploadId, ...input }))
+          .rejects.toMatchObject({ code: 'directory-upload-failed' })
+      }
+      await uploader.abortDirectoryUpload(session.uploadId)
+      await expect(stat(session.path)).rejects.toMatchObject({ code: 'ENOENT' })
+      // A second abort is deliberately idempotent for UI error cleanup.
+      await expect(uploader.abortDirectoryUpload(session.uploadId)).resolves.toBeUndefined()
+    } finally {
+      await fiber.dispose()
+    }
+  })
+
+  it('follows the configured upload-root fence and refuses a symlink parent inside an upload', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({
+      maxEntries: 1000,
+      uploadRoot: join(root, 'projects'),
+    }))
+    await fiber.await()
+    const uploader = ctx.get('directoryPicker')!.capability()
+    if (uploader.kind !== 'browse') throw new Error('browse backend must advertise the browse capability')
+    try {
+      await expect(uploader.beginDirectoryUpload({
+        parentPath: root, name: 'outside-fence', fileCount: 1, totalBytes: 1,
+      })).rejects.toMatchObject({ code: 'directory-upload-failed' })
+      const session = await uploader.beginDirectoryUpload({
+        parentPath: join(root, 'projects'), name: 'symlink-fence', fileCount: 1, totalBytes: 1,
+      })
+      const staging = join(join(root, 'projects'), `.symlink-fence.dsh-upload-${session.uploadId}`)
+      await symlink(root, join(staging, 'escape'), 'junction')
+      await expect(uploader.writeDirectoryUpload({
+        uploadId: session.uploadId, path: 'escape/file.txt', offset: 0,
+        data: Buffer.from('x').toString('base64'), done: true,
+      })).rejects.toMatchObject({ code: 'directory-upload-failed' })
+      await uploader.abortDirectoryUpload(session.uploadId)
+      // Removing the isolated upload unlinks the junction; it never follows
+      // it into the pre-existing configured tree.
+      await expect(stat(root)).resolves.toBeTruthy()
+    } finally {
+      await fiber.dispose()
+    }
   })
 })

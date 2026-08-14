@@ -177,6 +177,14 @@ const BROWSE_STUB: DirectoryPickerCapability = {
     if (name === 'unwritable') throw new Error('disk detached')
     return `${path}/${name}`
   },
+  beginDirectoryUpload: async input => ({
+    uploadId: '00000000-0000-4000-8000-000000000001',
+    path: `${input.parentPath}/${input.name}`,
+    maxChunkBytes: 1024,
+  }),
+  writeDirectoryUpload: async input => ({ offset: input.offset + Buffer.from(input.data, 'base64').byteLength }),
+  completeDirectoryUpload: async () => '/home/user/uploaded',
+  abortDirectoryUpload: async () => {},
 }
 
 describe('host.listDirectory / host.createDirectory', () => {
@@ -188,6 +196,21 @@ describe('host.listDirectory / host.createDirectory', () => {
     expect(listed.result).toMatchObject({ ok: true, value: { path: '/home/user/projects' } })
     const created = await api.host.createDirectory(request({ path: '/home/user', name: 'fresh' }))
     expect(created.result).toEqual({ ok: true, value: { path: '/home/user/fresh' } })
+    const begun = await api.host.beginDirectoryUpload(request({
+      parentPath: '/home/user', name: 'upload', fileCount: 1, totalBytes: 2,
+    }))
+    expect(begun.result).toMatchObject({
+      ok: true, value: { uploadId: '00000000-0000-4000-8000-000000000001', path: '/home/user/upload' },
+    })
+    expect((await api.host.writeDirectoryUpload(request({
+      uploadId: '00000000-0000-4000-8000-000000000001', path: 'a.txt', offset: 0, data: 'aGk=', done: true,
+    }))).result).toEqual({ ok: true, value: { offset: 2 } })
+    expect((await api.host.completeDirectoryUpload(request({
+      uploadId: '00000000-0000-4000-8000-000000000001',
+    }))).result).toEqual({ ok: true, value: { path: '/home/user/uploaded' } })
+    expect((await api.host.abortDirectoryUpload(request({
+      uploadId: '00000000-0000-4000-8000-000000000001',
+    }))).result).toEqual({ ok: true, value: { aborted: true } })
   })
 
   it('maps typed picker failures onto the wire error codes and folds unknown throws to internal', async () => {
@@ -210,6 +233,12 @@ describe('host.listDirectory / host.createDirectory', () => {
         signal?.addEventListener('abort', () => { reject(new Error('scan aborted')) }, { once: true })
       }),
       createDirectory: async () => '/never',
+      beginDirectoryUpload: async () => ({
+        uploadId: '00000000-0000-4000-8000-000000000001', path: '/never', maxChunkBytes: 1,
+      }),
+      writeDirectoryUpload: async () => ({ offset: 0 }),
+      completeDirectoryUpload: async () => '/never',
+      abortDirectoryUpload: async () => {},
     })
     const abort = new AbortController()
     const pending = api.host.listDirectory(request({}), abort.signal)
@@ -225,6 +254,9 @@ describe('host.listDirectory / host.createDirectory', () => {
     expect((await api.host.createDirectory(request({ path: '/x', name: 'y' }))).result).toMatchObject({
       ok: false, error: { code: 'directory-picker-unavailable', details: { capability: 'native' } },
     })
+    expect((await api.host.beginDirectoryUpload(request({
+      parentPath: '/x', name: 'y', fileCount: 1, totalBytes: 0,
+    }))).result).toMatchObject({ ok: false, error: { code: 'directory-picker-unavailable' } })
   })
 })
 

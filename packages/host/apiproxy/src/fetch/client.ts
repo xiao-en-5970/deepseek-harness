@@ -14,8 +14,10 @@ import type { Wire } from '../api/rpc.schema.ts'
 import { rpcReceiptSchema, serverRequestSchema, serverResponseSchema } from '../api/rpc.schema.ts'
 import { hostFrameSchema, muxFrameSchema } from '../api/events.schema.ts'
 import {
-  hostCreateDirectoryValueSchema, hostDescribeValueSchema,
+  hostAbortDirectoryUploadValueSchema, hostBeginDirectoryUploadValueSchema,
+  hostCompleteDirectoryUploadValueSchema, hostCreateDirectoryValueSchema, hostDescribeValueSchema,
   hostListDirectoryValueSchema, hostOpenPathValueSchema, hostPickDirectoryValueSchema,
+  hostWriteDirectoryUploadValueSchema,
 } from '../api/host.schema.ts'
 import {
   sessionCancelValueSchema,
@@ -110,6 +112,10 @@ export interface IApiClient {
     pickDirectory(payload: RequestPayload<'host.pickDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.pickDirectory'>>>
     listDirectory(payload: RequestPayload<'host.listDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.listDirectory'>>>
     createDirectory(payload: RequestPayload<'host.createDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.createDirectory'>>>
+    beginDirectoryUpload(payload: RequestPayload<'host.beginDirectoryUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.beginDirectoryUpload'>>>
+    writeDirectoryUpload(payload: RequestPayload<'host.writeDirectoryUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.writeDirectoryUpload'>>>
+    completeDirectoryUpload(payload: RequestPayload<'host.completeDirectoryUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.completeDirectoryUpload'>>>
+    abortDirectoryUpload(payload: RequestPayload<'host.abortDirectoryUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.abortDirectoryUpload'>>>
     openPath(payload: RequestPayload<'host.openPath'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.openPath'>>>
   }
   workspace: {
@@ -190,6 +196,10 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'host.pickDirectory': hostPickDirectoryValueSchema,
   'host.listDirectory': hostListDirectoryValueSchema,
   'host.createDirectory': hostCreateDirectoryValueSchema,
+  'host.beginDirectoryUpload': hostBeginDirectoryUploadValueSchema,
+  'host.writeDirectoryUpload': hostWriteDirectoryUploadValueSchema,
+  'host.completeDirectoryUpload': hostCompleteDirectoryUploadValueSchema,
+  'host.abortDirectoryUpload': hostAbortDirectoryUploadValueSchema,
   'host.openPath': hostOpenPathValueSchema,
   'workspace.list': workspaceListValueSchema,
   'workspace.create': workspaceCreateValueSchema,
@@ -440,6 +450,10 @@ export abstract class AbstractApiClient implements IApiClient {
     ),
     listDirectory: (payload, signal) => this.callUnary('host.listDirectory', payload, signal),
     createDirectory: (payload, signal) => this.callUnary('host.createDirectory', payload, signal),
+    beginDirectoryUpload: (payload, signal) => this.callUnary('host.beginDirectoryUpload', payload, signal),
+    writeDirectoryUpload: (payload, signal) => this.callUnary('host.writeDirectoryUpload', payload, signal),
+    completeDirectoryUpload: (payload, signal) => this.callUnary('host.completeDirectoryUpload', payload, signal),
+    abortDirectoryUpload: (payload, signal) => this.callUnary('host.abortDirectoryUpload', payload, signal),
     openPath: (payload, signal) => this.callUnary('host.openPath', payload, signal),
   }
 
