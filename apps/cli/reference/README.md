@@ -65,7 +65,29 @@ The production Web runner needs built package and frontend artifacts (`pnpm run 
 
 Process shutdown gives the plugin tree up to five seconds to dispose. The first `SIGINT`/`SIGTERM` starts that graceful drain — `SIGTERM` is a supervisor's ordinary stop request and exits 0 on every surface, `SIGINT` reports 130; a second signal forces immediate exit. If one-shot normal completion is already stuck in disposal, the first `Ctrl+C` is the escalation and exits immediately instead of being swallowed.
 
-All modes treat the invoking directory as the default workspace root, load applicable `AGENTS.md` or `CLAUDE.md` instructions with a 65,536-byte render budget, and use an in-memory SQLite session content index. Every profile boot watches valid edits of both `cordis.patch.yml` layers (profile and home) and reapplies them transactionally; a one-shot surface exits through its bounded shutdown, which disposes the watchers.
+Profile boot modes treat the invoking directory as the default workspace root, load applicable `AGENTS.md` or `CLAUDE.md` instructions with a 65,536-byte render budget, and use an in-memory SQLite session content index. Every profile boot watches valid edits of both `cordis.patch.yml` layers (profile and home) and reapplies them transactionally; a one-shot surface exits through its bounded shutdown, which disposes the watchers.
+
+## Tenant Web gateway
+
+`dsh tenant-web` is a launcher-owned gateway rather than a profile. Until the browser submits its identifier, every application request receives an inline selector document and no Harness child starts. The submitted identifier is NFKC-normalized, trimmed, case-sensitive, and limited to 64 characters; blank selects the default child. A session-scoped HttpOnly cookie routes subsequent HTTP, SSE, and WebSocket traffic. `/__dsh_tenant/current` returns only this browser's current routing state, `/__dsh_tenant/reset` clears the cookie and reopens the selector, and `/__dsh_tenant/default` selects the blank/default child directly. The cookie is routing state, not proof of identity.
+
+The default child inherits the gateway's original working directory, `HOME`, and `DSH_HOME`. Each named child uses `<tenant-root>/v1/<sha256(identifier)>/home` as both `HOME` and working directory, a sibling `.dsh` as `DSH_HOME`, and a generated highest-precedence patch that confines browser listing, New folder, and upload to that home. Workspace registration, sessions, settings, credentials, attachments, profile configuration, and browser uploads therefore use identifier-specific roots. The identifier itself never appears in a filesystem path.
+
+That generated patch also points the named child's credential provider at the default child's `.credentials.yaml` as a read-only fallback. Resolution is inherited process environment, named local file, default fallback file, then project/user `.env`. Models still writes only the named local file: saving a key creates an identifier-specific override, while deleting that key returns to the current default-space value without copying it. Both files are hot-reloaded. General settings capability-probes the gateway, shows the current identifier, and exposes the reset/default routes; ordinary `dsh web` keeps the row hidden.
+
+Children listen on OS-assigned loopback ports and start only on first use. `--max-active-tenants` bounds simultaneously running children; a full gateway evicts the least-recent idle child and returns 503 when every child has an active HTTP or WebSocket lease. `--idle-timeout-ms` stops inactive children, and `--start-timeout-ms` bounds boot. Stopping the gateway terminates every owned child. Restarting a stopped child reopens the same durable roots.
+
+| Argument | Default | Meaning |
+|---|---:|---|
+| `--host` | `127.0.0.1` | Loopback bind; any other value is rejected. |
+| `--port` | `3080` | Gateway listen port; `0` asks the OS to choose. |
+| `--tenant-root` | `$DSH_HOME/tenant-web` | Durable root for named tenants. |
+| `--max-active-tenants` | `8` | Maximum live child processes. |
+| `--idle-timeout-ms` | `1800000` | Idle child lifetime. |
+| `--start-timeout-ms` | `120000` | Child readiness budget. |
+| `--patch` | none | Repeatable Web-profile overlay forwarded to every child; the named-tenant confinement patch is applied last. |
+
+The gateway deliberately provides isolation, not authentication or hostile-code containment. It binds loopback only; a remote deployment must supply TLS and authentication at an outer reverse proxy. Browsers on the same origin share the selector cookie, so switching an identifier changes every tab in that browser session.
 
 New sessions default to the `workspace-write` permission preset. Bash and filesystem mutations are restricted to the session workspace and platform temporary roots; reads, network access, and process visibility are not confined. `DSH_PERMISSION_MODE` changes the process fallback. Stored General-settings permissions affect later Web sessions, not an already-open one.
 

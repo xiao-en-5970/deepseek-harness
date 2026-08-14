@@ -5,6 +5,7 @@
  * ```text
  * inherited process environment      (read-only, wins)
  * > $DSH_HOME/.credentials.yaml      (provider-managed, writable)
+ * > configured shared fallback file  (read-only source, locally overridable)
  * > <invocation cwd>/.env            (read-only fallback)
  * > $DSH_HOME/.env                   (read-only fallback)
  * ```
@@ -57,6 +58,8 @@ export interface Config {
   path?: string
   /** Harness home used when `path` is omitted; defaults to `$DSH_HOME` or `~/.dsh`. */
   dshHome?: string
+  /** Optional read-only credentials document below the local store and above `.env` layers. */
+  fallbackPath?: string
   /** Watch the document and hot-publish external edits; defaults to true. */
   watch?: boolean
   /** Watcher write-settle window in milliseconds; defaults to 100. */
@@ -66,6 +69,7 @@ export interface Config {
 /** Fully resolved provider parameters; defaulting happens here, never inline. */
 interface ResolvedSpec {
   filename: string
+  fallbackFilename: string | undefined
   watch: boolean
   debounceMs: number
 }
@@ -77,8 +81,14 @@ interface ResolvedSpec {
  * @returns the resolved file location and watch behavior.
  */
 export function resolveSpec(config: Config): ResolvedSpec {
+  const filename = resolve(config.path ?? join(resolveDshHome(config.dshHome), CREDENTIALS_FILENAME))
+  const fallbackFilename = config.fallbackPath === undefined ? undefined : resolve(config.fallbackPath)
+  if (fallbackFilename === filename) {
+    throw new Error('credentials-local: fallbackPath must differ from the writable credentials path')
+  }
   return {
-    filename: resolve(config.path ?? join(resolveDshHome(config.dshHome), CREDENTIALS_FILENAME)),
+    filename,
+    fallbackFilename,
     watch: config.watch ?? true,
     debounceMs: config.debounceMs ?? 100,
   }
@@ -211,6 +221,7 @@ export class LocalCredentialProvider extends CredentialProvider {
   static Config: z<Config> = z.object({
     path: z.string(),
     dshHome: z.string(),
+    fallbackPath: z.string(),
     watch: z.boolean().default(true),
     debounceMs: z.number().min(0).default(100),
   })
@@ -224,6 +235,10 @@ export class LocalCredentialProvider extends CredentialProvider {
   private text: string | undefined
   /** Parsed document snapshot; replaced wholesale on every reload. */
   private values = new Map<string, string>()
+  /** Raw text of the optional shared fallback document. */
+  private fallbackText: string | undefined
+  /** Parsed shared fallback snapshot; never mutated by this provider. */
+  private fallbackValues = new Map<string, string>()
   /**
    * Single exclusive operation chain: watcher reloads and line edits run one
    * at a time in queue order (settled tail), so an edit can never render from
@@ -270,37 +285,47 @@ export class LocalCredentialProvider extends CredentialProvider {
       await this.operations
     }
     await this.loadInitial()
+    await this.loadFallbackInitial()
     if (!this.spec.watch) return
     /* jscpd:ignore-start -- same watcher discipline as settings-file by design:
        the serialized-refresh and quiesce-on-dispose shape is the reviewed
        lifecycle contract, not accidental repetition. */
-    const watcher = chokidarWatch(await canonicalizeWatchPath(this.spec.filename), {
-      ignoreInitial: true,
-      awaitWriteFinish: {
-        stabilityThreshold: this.spec.debounceMs,
-        pollInterval: Math.max(1, Math.min(this.spec.debounceMs, 10)),
-      },
-    })
-    watcher.on('all', () => {
-      if (this.closed) return
-      this.queueRefresh()
-    })
-    watcher.on('ready', () => {
-      // The initial load raced the watcher's own setup: a change written
-      // between that read and the watcher becoming active never fires an
-      // event. One reconcile at ready closes the gap.
-      if (this.closed) return
-      this.queueRefresh()
-    })
-    watcher.on('error', (error) => {
-      this.ctx.logger.warn('credentials-local: watcher error on %s', this.spec.filename)
-      this.ctx.logger.warn(error)
-    })
+    const targets = [
+      { filename: this.spec.filename, layer: 'local' as const },
+      ...(this.spec.fallbackFilename === undefined
+        ? []
+        : [{ filename: this.spec.fallbackFilename, layer: 'fallback' as const }]),
+    ]
+    const watchers = await Promise.all(targets.map(async ({ filename, layer }) => {
+      const watcher = chokidarWatch(await canonicalizeWatchPath(filename), {
+        ignoreInitial: true,
+        awaitWriteFinish: {
+          stabilityThreshold: this.spec.debounceMs,
+          pollInterval: Math.max(1, Math.min(this.spec.debounceMs, 10)),
+        },
+      })
+      watcher.on('all', () => {
+        if (this.closed) return
+        this.queueRefresh(layer)
+      })
+      watcher.on('ready', () => {
+        // The initial load raced the watcher's own setup: a change written
+        // between that read and the watcher becoming active never fires an
+        // event. One reconcile at ready closes the gap.
+        if (this.closed) return
+        this.queueRefresh(layer)
+      })
+      watcher.on('error', (error) => {
+        this.ctx.logger.warn('credentials-local: watcher error on %s', filename)
+        this.ctx.logger.warn(error)
+      })
+      return watcher
+    }))
     yield async () => {
       // Quiesce: stop accepting events, close the watcher, then wait out any
       // queued or in-flight operation so nothing publishes after disposal.
       this.closed = true
-      await watcher.close()
+      await Promise.all(watchers.map(async watcher => watcher.close()))
       await this.operations
     }
     /* jscpd:ignore-end */
@@ -311,6 +336,8 @@ export class LocalCredentialProvider extends CredentialProvider {
     if (inherited !== undefined) return Promise.resolve({ value: inherited, source: 'env' })
     const stored = this.values.get(ref)
     if (stored !== undefined) return Promise.resolve({ value: stored, source: 'file' })
+    const shared = this.fallbackValues.get(ref)
+    if (shared !== undefined) return Promise.resolve({ value: shared, source: 'fallback-file' })
     const fallback = this.dotenvFallback(ref)
     if (fallback !== undefined) return Promise.resolve({ value: fallback.value, source: fallback.source })
     return Promise.resolve(undefined)
@@ -325,6 +352,8 @@ export class LocalCredentialProvider extends CredentialProvider {
     }
     const stored = this.values.get(ref)
     if (stored !== undefined) return Promise.resolve({ configured: true, source: 'file', writable: true })
+    const shared = this.fallbackValues.get(ref)
+    if (shared !== undefined) return Promise.resolve({ configured: true, source: 'fallback-file', writable: true })
     const fallback = this.dotenvFallback(ref)
     if (fallback !== undefined) return Promise.resolve({ configured: true, source: fallback.source, writable: true })
     return Promise.resolve({ configured: false, writable: true })
@@ -354,12 +383,13 @@ export class LocalCredentialProvider extends CredentialProvider {
   }
 
   /** Queue a reload; only an invariant violation escaping the fan-out can reject it. */
-  private queueRefresh(): void {
-    void this.enqueue(() => this.refresh()).catch((error: unknown) => {
+  private queueRefresh(layer: 'local' | 'fallback'): void {
+    void this.enqueue(() => this.refresh(layer)).catch((error: unknown) => {
       // Only an invariant violation escaping the update fan-out can reject a
       // refresh; keep the operation queue alive and surface it as an error so
       // one poisoned commit cannot silently end hot reloading forever.
-      this.ctx.logger.error('credentials-local: reload commit failed at %s', this.spec.filename)
+      const filename = layer === 'local' ? this.spec.filename : this.spec.fallbackFilename
+      this.ctx.logger.error('credentials-local: reload commit failed at %s', filename)
       this.ctx.logger.error(error)
     })
   }
@@ -434,6 +464,22 @@ export class LocalCredentialProvider extends CredentialProvider {
     this.text = text
   }
 
+  /** Load the optional shared fallback; absence is an empty inherited store. */
+  private async loadFallbackInitial(): Promise<void> {
+    const filename = this.spec.fallbackFilename
+    if (filename === undefined) return
+    await assertOwnerOnly(filename)
+    let text: string
+    try {
+      text = await readFile(filename, 'utf8')
+    } catch (error) {
+      if (!isENOENT(error)) throw error
+      return
+    }
+    this.fallbackValues = parseCredentialsDocument(text, filename)
+    this.fallbackText = text
+  }
+
   /* jscpd:ignore-start -- same deliberate mirror of settings-file's reload and
      reconcile policy: warn-and-keep on a reload, throw on a write, invariant
      failures propagate. */
@@ -444,13 +490,15 @@ export class LocalCredentialProvider extends CredentialProvider {
    * process down. An invariant violation escaping the fan-out is not a reload
    * failure and propagates to the queue's error surface.
    */
-  private async refresh(): Promise<void> {
+  private async refresh(layer: 'local' | 'fallback'): Promise<void> {
     if (this.closed) return
+    const filename = layer === 'local' ? this.spec.filename : this.spec.fallbackFilename
     try {
-      await this.reconcileFromDisk()
+      if (layer === 'local') await this.reconcileFromDisk()
+      else await this.reconcileFallbackFromDisk()
     } catch (error) {
       if ((error as { code?: unknown } | null)?.code === 'INVARIANT') throw error
-      this.ctx.logger.warn('credentials-local: reload failed at %s; keeping the last good document', this.spec.filename)
+      this.ctx.logger.warn('credentials-local: reload failed at %s; keeping the last good document', filename)
       this.ctx.logger.warn(error)
     }
   }
@@ -479,6 +527,31 @@ export class LocalCredentialProvider extends CredentialProvider {
     this.text = text
     this.values = next
     for (const ref of changed) this.notifyUpdated(ref)
+  }
+
+  /** Reconcile the read-only shared fallback and publish only effective changes. */
+  private async reconcileFallbackFromDisk(): Promise<void> {
+    const filename = this.spec.fallbackFilename
+    if (filename === undefined) return
+    await assertOwnerOnly(filename)
+    let text: string | undefined
+    try {
+      text = await readFile(filename, 'utf8')
+    } catch (error) {
+      if (!isENOENT(error)) throw error
+      text = undefined
+    }
+    if (text === this.fallbackText || this.isClosed()) return
+    const next = text === undefined ? new Map<string, string>() : parseCredentialsDocument(text, filename)
+    const changed = this.changedRefs(this.fallbackValues, next)
+    this.fallbackText = text
+    this.fallbackValues = next
+    for (const ref of changed) {
+      // A local value or inherited environment still wins, so a shared-file
+      // edit cannot change either resolution or describe() for this ref.
+      if (this.inherited(ref) !== undefined || this.values.has(ref)) continue
+      this.notifyUpdated(ref)
+    }
   }
   /* jscpd:ignore-end */
 

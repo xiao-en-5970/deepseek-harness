@@ -2,18 +2,19 @@
 
 [English](README.md) | 中文
 
-文件型[凭据](../credentials/README.md)提供方：四层来源，一套明确的优先级。
+文件型[凭据](../credentials/README.md)提供方：可选的共享后备加普通本地各层，遵循一套明确的优先级。
 
 | 层 | 来源 id | 可写 | 优先 |
 |---|---|---|---|
 | 继承的进程环境 | `env` | 否 | 始终优先 |
-| `$DSH_HOME/.credentials.yaml` 文档 | `file` | 是（`set`/`unset`） | 高于两个 `.env` 层 |
+| `$DSH_HOME/.credentials.yaml` 文档 | `file` | 是（`set`/`unset`） | 高于共享后备与两个 `.env` 层 |
+| 配置的 `fallbackPath` 文档 | `fallback-file` | 否（但可在本地覆盖） | 低于本地文档，高于两个 `.env` 层 |
 | `<invocation cwd>/.env` | `project-env` | 不在此处 | 高于用户 `.env` |
 | `$DSH_HOME/.env` | `user-env` | 不在此处 | 其余情况 |
 
 启动环境优先，因为按次覆盖（`DEEPSEEK_API_KEY=… dsh`、CI 机密、容器 `-e`）代表本次运行的操作者意图——而它无法从进程内部修改，就必须*可见地*只读：`describe()` 报告 `source: 'env', writable: false`，`set`/`unset` 直接拒绝，而不是写下一个读取方永远看不到的变更。
 
-它之下的所有来源优先级都低于受管存储，因此 Models 页写入的密钥会立即生效，即使某个 `.env` 里还留着更旧的密钥。没有存储任何东西时这两层仍会参与解析，`describe()` 会把来源报告为 `project-env` 或 `user-env` 且 `writable: true`——存入一个密钥就会取代它们成为生效来源。
+它之下的所有来源优先级都低于受管存储，因此 Models 页写入的密钥会立即生效，即使共享后备或某个 `.env` 里还留着更旧的密钥。配置的后备作为来源只读，但 `describe()` 报告 `writable: true`：`set` 会创建本地覆盖，`unset` 会移除该覆盖，使解析恢复为 `fallback-file`。值始终在原文件中读取，不会复制进本地文档。只有本地与共享存储都不提供该引用时，两个 `.env` 层才继续参与解析。
 
 在产品 CLI（命令行界面）下，解析读取的是启动器冻结的[环境快照](../../util/launch-environment/README.md)而不是 `process.env`：只有快照才说得清某个值来自启动 shell 还是来自某个文件。并非由产品 CLI 启动的组合只有继承环境这一层，这让嵌入方保持它们原有的语义。
 
@@ -23,6 +24,7 @@
 |---|---|---|
 | `path` | `<harness home>/.credentials.yaml` | 凭据文档位置。 |
 | `dshHome` | `$DSH_HOME` 或 `~/.dsh` | `path` 缺省时使用的 harness home。 |
+| `fallbackPath` | 无 | 位于可写本地存储之下的可选只读凭据文档；必须与 `path` 不同。 |
 | `watch` | `true` | 热发布外部编辑。 |
 | `debounceMs` | `100` | watcher 写入稳定窗口。 |
 
@@ -47,7 +49,7 @@ OPENAI_API_KEY: sk-…
 
 ## 热重载
 
-外部编辑在快照**整体替换**后按变更引用逐个发布 `credentials/updated`——磁盘上删掉的条目绝不在内存滞留。在 Chokidar 打开目标之前，提供方会对层级最深的现有祖先路径执行 realpath 解析，再拼回缺失的后缀；文件访问和诊断仍使用配置路径，从而避免 Windows 混用 8.3 别名与 libuv 的长格式事件路径。提供方自己的写入按内容识别，只发布属于该次提交的一个事件。运行期文档不可读或无效时保留最后可用快照并告警；文件不存在即空存储；启动时不可读或无效则明确报错。
+外部编辑在快照**整体替换**后按生效值有变化的引用逐个发布 `credentials/updated`——磁盘上删掉的条目绝不在内存滞留。可写文档与配置的后备都会被监视；若后备变更仍被环境值或本地值遮蔽，则因解析结果未变而不发布事件。在 Chokidar 打开任一目标之前，提供方会对层级最深的现有祖先路径执行 realpath 解析，再拼回缺失的后缀；文件访问和诊断仍使用配置路径，从而避免 Windows 混用 8.3 别名与 libuv 的长格式事件路径。提供方自己的写入按内容识别，只发布属于该次提交的一个事件。运行期文档不可读或无效时保留最后可用快照并告警；文件不存在即空存储；启动时不可读或无效则明确报错。
 
 <a id="security-boundary"></a>
 

@@ -47,6 +47,17 @@ switch (invocation.mode) {
     runDumpConfig(invocation.profile, invocation.defaultOnly, invocation.patches)
     break
   }
+  case 'tenant-web': {
+    const { runTenantWeb } = await import('./tenant-web.ts')
+    const entrypoint = process.argv[1]
+    if (entrypoint === undefined) throw new Error('dsh tenant-web: process entrypoint is unavailable')
+    process.exitCode = await runTenantWeb({
+      ...invocation,
+      entrypoint,
+      execArgv: process.execArgv,
+    })
+    break
+  }
   default:
     invocation satisfies never
     throw new Error(`dsh: unhandled invocation mode ${JSON.stringify(invocation)}`)

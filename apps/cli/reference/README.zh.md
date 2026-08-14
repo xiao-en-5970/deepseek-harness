@@ -65,7 +65,29 @@ dsh web --help
 
 进程关闭时，插件树最多有 5 秒完成 dispose。首次收到 `SIGINT` 或 `SIGTERM` 时会开始优雅排空：`SIGTERM` 是监督进程发出的常规停止请求，在所有运行模式下都以 0 退出；`SIGINT` 则报告 130。第二次收到信号时会立即强制退出。如果一次性运行在正常结束时已经卡在 dispose 阶段，第一次按下 `Ctrl+C` 就会直接升级为强制退出，而不会被忽略。
 
-所有模式都将运行命令时所在的目录作为默认 workspace 根目录，以 65,536 字节渲染预算加载适用的 `AGENTS.md` 或 `CLAUDE.md` 指令，并使用内存 SQLite 会话内容索引。每次启动 profile 时，系统都会监视 profile 与 home 两个 `cordis.patch.yml` 配置层的有效变更，并以事务方式重新应用；一次性运行模式通过有界关闭流程退出，该流程会先 dispose 监视器。
+profile 启动模式将运行命令时所在的目录作为默认 workspace 根目录，以 65,536 字节渲染预算加载适用的 `AGENTS.md` 或 `CLAUDE.md` 指令，并使用内存 SQLite 会话内容索引。每次启动 profile 时，系统都会监视 profile 与 home 两个 `cordis.patch.yml` 配置层的有效变更，并以事务方式重新应用；一次性运行模式通过有界关闭流程退出，该流程会先 dispose 监视器。
+
+## Tenant Web 网关
+
+`dsh tenant-web` 是启动器拥有的网关，而不是一个 profile。在浏览器提交标识符之前，每个应用请求都只收到内联选择器文档，也不会启动 Harness 子进程。提交的标识符会经过 NFKC 规范化与首尾空白裁剪，区分大小写，且最多 64 个字符；留空选择默认子进程。此后，作用于浏览器会话的 HttpOnly Cookie 为 HTTP、SSE 与 WebSocket 流量选择路由。`/__dsh_tenant/current` 只返回当前浏览器的路由状态，`/__dsh_tenant/reset` 清除 Cookie 并重新打开选择器，`/__dsh_tenant/default` 则直接选择留空／默认子进程。Cookie 是路由状态，不是身份证明。
+
+默认子进程继承网关原本的工作目录、`HOME` 与 `DSH_HOME`。每个命名子进程以 `<tenant-root>/v1/<sha256(identifier)>/home` 同时作为 `HOME` 和工作目录，以同级 `.dsh` 作为 `DSH_HOME`，并应用一份最高优先级的生成 patch，把浏览器列举、「新建文件夹」与上传限制在该 home 下。因此 workspace 注册、会话、设置、凭据、附件、profile 配置和浏览器上传均使用标识符专属根目录；标识符本身不会出现在文件系统路径中。
+
+该生成 patch 还会把命名子进程的凭据提供方指向默认子进程的 `.credentials.yaml`，作为只读后备。解析优先级依次为继承的进程环境、命名租户本地文件、默认空间后备文件、项目／用户 `.env`。「模型」页仍只写命名租户本地文件：保存 Key 会创建标识符专属覆盖，删除该 Key 则恢复使用默认空间的当前值，全程不复制值。两个文件都会热重载。「通用设置」会探测网关、显示当前标识符并提供重新选择／切回默认的入口；普通 `dsh web` 下该行保持隐藏。
+
+子进程监听由 OS 分配的 loopback 端口，仅在首次使用时启动。`--max-active-tenants` 限制同时运行的子进程数量；网关满载时会驱逐最久未使用的空闲子进程，而所有子进程都有活跃 HTTP 或 WebSocket 租约时返回 503。`--idle-timeout-ms` 停止不活跃的子进程，`--start-timeout-ms` 限制启动时间。停止网关会终止它拥有的全部子进程；再次启动已停止的子进程会重新打开同一套持久化根目录。
+
+| 参数 | 默认值 | 含义 |
+|---|---:|---|
+| `--host` | `127.0.0.1` | loopback 绑定；拒绝其他值。 |
+| `--port` | `3080` | 网关监听端口；`0` 表示交由 OS 选择。 |
+| `--tenant-root` | `$DSH_HOME/tenant-web` | 命名租户的持久化根目录。 |
+| `--max-active-tenants` | `8` | 同时存活的子进程上限。 |
+| `--idle-timeout-ms` | `1800000` | 空闲子进程存活时间。 |
+| `--start-timeout-ms` | `120000` | 子进程就绪预算。 |
+| `--patch` | 无 | 可重复的 Web-profile 覆盖，转发给每个子进程；命名租户的限制 patch 最后应用。 |
+
+网关明确提供隔离，而不是身份认证或恶意代码遏制。它只绑定 loopback；远程部署必须由外层反向代理提供 TLS 与身份认证。同一来源下的浏览器标签页共享选择器 Cookie，因此切换标识符会改变该浏览器会话中的所有标签页。
 
 新会话默认使用 `workspace-write` 权限预设。Bash 和文件系统修改仅限于会话 workspace 与平台临时根目录；读取、网络访问和进程可见性不受限制。`DSH_PERMISSION_MODE` 更改进程后备值。General settings 中存储的权限影响后续 Web 会话，不改变已打开的会话。
 

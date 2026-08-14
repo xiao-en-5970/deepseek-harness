@@ -11,9 +11,14 @@
 | `dsh --profile <name>` | 启动位于 `$DSH_HOME/profiles/<name>` 的指定 profile。 |
 | `dsh --profile headless "job"` | 运行一个全新的持久化会话，打印最终答案并退出。 |
 | `dsh web` | `--profile web` 的别名。 |
+| `dsh tenant-web` | 提供阻塞式浏览器标识符选择器，并为每个标识符运行一个隔离的 Web 子进程。 |
 | `dsh plugin --profile <name> <pnpm args>` | 通过在 profile 目录中转发给 pnpm 来管理该 profile 的插件。 |
 
-运行命令时所在的目录将作为默认 workspace 根目录。`web` 和 `headless` profile 在首次使用时会从随附模板自动初始化；其他任何 profile 都必须通过 `dsh plugin` 创建。
+运行普通 profile 或在 `tenant-web` 中留空标识符时，命令所在目录是默认 workspace 根目录；命名租户则在配置的租户根目录下获得私有工作目录与 Harness home。`web` 和 `headless` profile 在首次使用时会从随附模板自动初始化；其他任何 profile 都必须通过 `dsh plugin` 创建。
+
+## 按标识符隔离的 Web
+
+`dsh tenant-web` 会在 Harness 应用之前提供一个内联的阻塞式选择器。标识符留空时路由到普通的默认 Web 数据；每个经过规范化的非空标识符都会启动一个仅监听 loopback 的 `dsh web` 子进程，并使用独立的 `HOME`、`DSH_HOME`、workspace 根目录、设置和会话持久化。浏览器会话 Cookie 为 HTTP、SSE 与 WebSocket 请求选择子进程。命名租户在「模型」页保存本地覆盖之前会继承默认空间的提供方 API Key；值通过后备层原地读取，不会被复制。「通用设置」会显示当前标识符、重新选择入口，并为命名租户提供直接切回默认空间的入口。该机制隔离产品数据，但不对标识符进行身份认证，因此网关只绑定 loopback，远程访问必须置于经过认证的外层反向代理之后。路由、flag、生命周期和限制以 [CLI 行为参考](reference/README.md#tenant-web-gateway)为准。
 
 ## 应用参数
 

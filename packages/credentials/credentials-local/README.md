@@ -2,18 +2,19 @@
 
 English | [中文](README.zh.md)
 
-File-backed [credentials](../credentials/README.md) provider: four layers, one honest precedence.
+File-backed [credentials](../credentials/README.md) provider: an optional shared fallback plus the ordinary local layers, with one honest precedence.
 
 | Layer | Source id | Writable | Wins |
 |---|---|---|---|
 | Inherited process environment | `env` | no | always |
-| `$DSH_HOME/.credentials.yaml` document | `file` | yes (`set`/`unset`) | over both `.env` layers |
+| `$DSH_HOME/.credentials.yaml` document | `file` | yes (`set`/`unset`) | over the shared fallback and both `.env` layers |
+| Configured `fallbackPath` document | `fallback-file` | no (but locally overridable) | below the local document, above both `.env` layers |
 | `<invocation cwd>/.env` | `project-env` | not here | over the user `.env` |
 | `$DSH_HOME/.env` | `user-env` | not here | otherwise |
 
 The launching environment wins because a per-run override (`DEEPSEEK_API_KEY=… dsh`, a CI secret, a container `-e`) is operator intent for this run — and because it cannot be edited from inside, it must be *visibly* read-only: `describe()` reports `source: 'env', writable: false`, and `set`/`unset` reject instead of writing a change the reader would never see.
 
-Everything below it loses to the managed store, so a key written by the Models page takes effect immediately even when an older key sits in a `.env`. Those two layers still resolve when nothing is stored, and `describe()` names them `project-env` or `user-env` with `writable: true` — storing a key replaces them as the effective source.
+Everything below it loses to the managed store, so a key written by the Models page takes effect immediately even when an older key sits in the shared fallback or a `.env`. A configured fallback is read-only as a source but `describe()` reports `writable: true`: `set` creates a local override, and `unset` removes that override so resolution returns to `fallback-file`. The value is read in place and is never copied to the local document. The two `.env` layers still resolve when neither local nor shared storage supplies the reference.
 
 Under the product CLI, resolution reads the launcher's frozen [environment snapshot](../../util/launch-environment/README.md) rather than `process.env`: only the snapshot can say whether a value came from the launching shell or from a file. A composition the product CLI did not boot has the inherited environment as its only layer, which keeps embedders on the semantics they already had.
 
@@ -23,6 +24,7 @@ Under the product CLI, resolution reads the launcher's frozen [environment snaps
 |---|---|---|
 | `path` | `<harness home>/.credentials.yaml` | Credentials document location. |
 | `dshHome` | `$DSH_HOME` or `~/.dsh` | Harness home used when `path` is omitted. |
+| `fallbackPath` | none | Optional read-only credentials document below the writable local store. It must differ from `path`. |
 | `watch` | `true` | Hot-publish external edits. |
 | `debounceMs` | `100` | Watcher write-settle window. |
 
@@ -47,7 +49,7 @@ The provider creates the directory `0700` and creates or atomically replaces the
 
 ## Hot reload
 
-External edits publish `credentials/updated` per changed reference after the snapshot is replaced **wholesale** — an entry deleted on disk never lingers in memory. Before Chokidar opens the target, the provider realpaths its deepest existing ancestor and restores any missing suffix; file access and diagnostics retain the configured path, while Windows cannot mix an 8.3 alias with long-form libuv events. The provider's own writes are recognized by content and publish exactly their one commit event. An unreadable or invalid document at runtime keeps the last good snapshot and warns; an absent file is an empty store; an unreadable or invalid file at boot fails loud.
+External edits publish `credentials/updated` per changed effective reference after the snapshot is replaced **wholesale** — an entry deleted on disk never lingers in memory. The writable document and configured fallback are both watched; a fallback edit hidden by an environment or local value publishes nothing because resolution did not change. Before Chokidar opens either target, the provider realpaths its deepest existing ancestor and restores any missing suffix; file access and diagnostics retain the configured path, while Windows cannot mix an 8.3 alias with long-form libuv events. The provider's own writes are recognized by content and publish exactly their one commit event. An unreadable or invalid document at runtime keeps the last good snapshot and warns; an absent file is an empty store; an unreadable or invalid file at boot fails loud.
 
 ## Security boundary
 
