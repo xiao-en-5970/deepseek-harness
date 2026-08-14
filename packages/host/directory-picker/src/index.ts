@@ -3,9 +3,10 @@
  * select a workspace directory. Backends differ in interaction shape, not
  * just mechanism, so the service exposes a discriminated capability instead
  * of one method set: a `native` backend opens one OS chooser on the
- * host's display, while a `browse` backend serves listing/creation primitives
- * for an in-app browser (and thereby works for remote clients no OS dialog
- * can reach). Consumers switch on `capability().kind`; the union is
+ * host's display, while a `browse` backend serves listing, creation, and
+ * transactional directory-upload primitives for an in-app browser (and
+ * thereby works for remote clients no OS dialog can reach). Consumers switch
+ * on `capability().kind`; the union is
  * merge-extensible, and the documented default for an unknown kind is to
  * hide the picking affordance rather than fail.
  * @module @deepseek-ai/dsh-host-directory-picker
@@ -56,7 +57,7 @@ export interface DirectoryListing {
 }
 
 /**
- * The browse interaction: listing/creation primitives an in-app browser
+ * The browse interaction: listing/creation/upload primitives an in-app browser
  * drives one level at a time. Works for remote clients — nothing renders on
  * the host display.
  */
@@ -84,6 +85,43 @@ export interface DirectoryPickerBrowseCapability {
    * `directory-create-failed` for a parent that is not fully qualified or any other failure.
    */
   createDirectory(path: string, name: string): Promise<string>
+  /** Begin a bounded browser-to-host directory upload under an existing parent. */
+  beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession>
+  /** Append one ordered base64 chunk to a file in an active upload. */
+  writeDirectoryUpload(input: DirectoryUploadChunk): Promise<DirectoryUploadProgress>
+  /** Commit an upload after every declared file and byte has landed. */
+  completeDirectoryUpload(uploadId: string): Promise<string>
+  /** Remove an incomplete upload root; unknown/expired ids are an idempotent no-op. */
+  abortDirectoryUpload(uploadId: string): Promise<void>
+}
+
+/** Manifest totals and destination for one local-directory upload. */
+export interface DirectoryUploadStart {
+  parentPath: string
+  name: string
+  fileCount: number
+  totalBytes: number
+}
+
+/** Server-owned upload identity and chunk bound. */
+export interface DirectoryUploadSession {
+  uploadId: string
+  path: string
+  maxChunkBytes: number
+}
+
+/** One ordered base64 file chunk; paths are slash-separated and relative to the upload root. */
+export interface DirectoryUploadChunk {
+  uploadId: string
+  path: string
+  offset: number
+  data: string
+  done: boolean
+}
+
+/** Next byte offset acknowledged after one chunk. */
+export interface DirectoryUploadProgress {
+  offset: number
 }
 
 /**
@@ -100,7 +138,11 @@ export interface DirectoryPickerCapabilities {
 export type DirectoryPickerCapability = DirectoryPickerCapabilities[keyof DirectoryPickerCapabilities]
 
 /** Closed failure vocabulary of the browse primitives (mirrored onto the wire by consumers). */
-export type DirectoryPickerErrorCode = 'directory-unreadable' | 'directory-exists' | 'directory-create-failed'
+export type DirectoryPickerErrorCode =
+  | 'directory-unreadable'
+  | 'directory-exists'
+  | 'directory-create-failed'
+  | 'directory-upload-failed'
 
 /** Typed failure thrown by browse primitives so consumers can map business codes without string matching. */
 export class DirectoryPickerError extends Error {

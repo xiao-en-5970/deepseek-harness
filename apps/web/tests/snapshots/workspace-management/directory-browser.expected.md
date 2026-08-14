@@ -51,6 +51,9 @@
   - button "New folder":
     - img
     - text: New folder
+  - button "Upload local folder":
+    - img
+    - text: Upload local folder
   - button "Show hidden files"
   - button "Cancel"
   - button "Open"

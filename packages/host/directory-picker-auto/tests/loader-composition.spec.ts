@@ -8,7 +8,7 @@
  */
 
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -90,9 +90,11 @@ afterEach(async () => {
 /** Write a two-row cordis.yml (webserver + chooser), then boot it through the real Loader. */
 async function loadComposition(
   bindHost: '127.0.0.1' | '0.0.0.0',
-  options: { failSurface?: boolean } = {},
-): Promise<{ ctx: Context; configPath: string }> {
+  options: { failSurface?: boolean; confineBrowse?: boolean } = {},
+): Promise<{ ctx: Context; configPath: string; browseRoot?: string }> {
   root = await mkdtemp(join(tmpdir(), 'dsh-directory-picker-auto-'))
+  const browseRoot = options.confineBrowse === true ? join(root, 'tenant-home') : undefined
+  if (browseRoot !== undefined) await mkdir(browseRoot)
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
     "- name: '@deepseek-ai/dsh-host-webserver'",
@@ -100,6 +102,11 @@ async function loadComposition(
     `    host: '${bindHost}'`,
     '    port: 0',
     `- name: '${AUTO}'`,
+    ...browseRoot === undefined ? [] : [
+      '  config:',
+      `    browseRoot: ${JSON.stringify(browseRoot)}`,
+      `    uploadRoot: ${JSON.stringify(browseRoot)}`,
+    ],
     '',
   ].join('\n'))
 
@@ -130,7 +137,7 @@ async function loadComposition(
     config: { path: pathToFileURL(configPath).href },
   })
   await context.loader.await()
-  return { ctx: context, configPath }
+  return { ctx: context, configPath, ...browseRoot === undefined ? {} : { browseRoot } }
 }
 
 /** Entry names currently present in the loader store (root tree plus subtrees). */
@@ -203,6 +210,19 @@ describe('real Loader composition', () => {
     expect(entryNames(ctx)).not.toContain(NATIVE_SURFACE)
     const picker = ctx.get('directoryPicker') as DirectoryPicker
     expect(picker.capability().kind).toBe('browse')
+  })
+
+  it('forwards configured browse confinement only to the resolved browse backend', { timeout: 60_000 }, async () => {
+    stubAttendedHost()
+    vi.stubEnv('SSH_CONNECTION', '10.0.0.2 55 10.0.0.9 22')
+    const { ctx, browseRoot } = await loadComposition('127.0.0.1', { confineBrowse: true })
+    const backend = [...ctx.loader.entries()].find(entry => entry.options.name === BROWSE)!
+    expect(backend.options.config).toEqual({ browseRoot, uploadRoot: browseRoot })
+    const picker = ctx.get('directoryPicker') as DirectoryPicker
+    const capability = picker.capability()
+    if (capability.kind !== 'browse') throw new Error('expected browse capability')
+    const canonical = await realpath(browseRoot!)
+    await expect(capability.list()).resolves.toMatchObject({ home: canonical, path: canonical })
   })
 
   it('mounts the browse backend for an all-interfaces bind even on an attended host', { timeout: 60_000 }, async () => {

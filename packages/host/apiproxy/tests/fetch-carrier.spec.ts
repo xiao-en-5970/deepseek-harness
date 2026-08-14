@@ -156,6 +156,21 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async createDirectory(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w/new' } } }
       },
+      async beginDirectoryUpload(request) {
+        return {
+          rpcId: request.rpcId,
+          result: { ok: true, value: { uploadId: '00000000-0000-4000-8000-000000000001', path: '/w/local', maxChunkBytes: 1024 } },
+        }
+      },
+      async writeDirectoryUpload(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { offset: request.payload.offset + 2 } } }
+      },
+      async completeDirectoryUpload(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w/local' } } }
+      },
+      async abortDirectoryUpload(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { aborted: true as const } } }
+      },
       async openPath(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { opened: true as const } } }
       },
@@ -410,6 +425,13 @@ describe('unary round trip (handler ⇄ client, no network)', () => {
     expect(home.result).toMatchObject({ ok: true, value: { home: '/w' } })
     const created = await c.host.createDirectory({ path: '/w', name: 'fresh' })
     expect(created.result).toEqual({ ok: true, value: { path: '/w/new' } })
+    const uploadId = '00000000-0000-4000-8000-000000000001'
+    const begun = await c.host.beginDirectoryUpload({ parentPath: '/w', name: 'local', fileCount: 1, totalBytes: 2 })
+    expect(begun.result).toEqual({ ok: true, value: { uploadId, path: '/w/local', maxChunkBytes: 1024 } })
+    const written = await c.host.writeDirectoryUpload({ uploadId, path: 'a.txt', offset: 0, data: 'aGk=', done: true })
+    expect(written.result).toEqual({ ok: true, value: { offset: 2 } })
+    expect((await c.host.completeDirectoryUpload({ uploadId })).result).toEqual({ ok: true, value: { path: '/w/local' } })
+    expect((await c.host.abortDirectoryUpload({ uploadId })).result).toEqual({ ok: true, value: { aborted: true } })
   })
 
   it('round-trips host.openPath through the wire form', async () => {

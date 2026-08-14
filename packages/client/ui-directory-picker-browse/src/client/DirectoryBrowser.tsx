@@ -16,8 +16,10 @@
  * selects the created folder. Open adopts the selected folder, falling back
  * to the listed level. Pure consumer of the injected browse calls — the
  * owning flow decides what "Open" means and owns the workspace-creation
- * error surface. Hidden entries are host-flagged and hidden by default; the
- * footer's fixed-label "Show hidden files" toggle (aria-pressed, check when
+ * error surface. The footer can upload a browser-local folder into the
+ * selected Host directory and adopts its completed root through the same
+ * Open path. Hidden entries are host-flagged and hidden by default; the
+ * fixed-label "Show hidden files" toggle (aria-pressed, check when
  * on) reveals them (client-side only). The path editor announces itself with
  * a pencil glyph and a bar-wide hover-lit outline, opens seeded with a
  * trailing separator, and keeps the panes under the draft: the final segment
@@ -38,9 +40,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
   Button, IconCheckOutline16, IconChevronRightOutline14, IconEditOutline16, IconFolderClose16, IconFolderOpen16,
-  IconPlusOutline16, Modal,
+  IconPlusOutline16, IconProjectAddOutline16, Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { DirectoryEntry, DirectoryListing } from '@deepseek-ai/dsh-client-runtime/client'
+import type {
+  DirectoryEntry, DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import { DirectoryBrowseError } from '@deepseek-ai/dsh-client-runtime/client'
 import type { Translate } from '@deepseek-ai/dsh-client-locale/client'
 import css from './DirectoryBrowser.module.css'
@@ -53,6 +57,14 @@ export interface DirectoryBrowserProps {
   listDirectory: (path?: string, signal?: AbortSignal) => Promise<DirectoryListing>
   /** Create one child directory under an existing parent. */
   createDirectory: (path: string, name: string) => Promise<string>
+  /** Begin one bounded browser-to-host directory upload. */
+  beginDirectoryUpload: (input: DirectoryUploadStart) => Promise<DirectoryUploadSession>
+  /** Append one ordered base64 chunk and return the acknowledged offset. */
+  writeDirectoryUpload: (input: DirectoryUploadChunk) => Promise<number>
+  /** Commit a complete upload and return its absolute root. */
+  completeDirectoryUpload: (uploadId: string) => Promise<string>
+  /** Remove an incomplete upload root. */
+  abortDirectoryUpload: (uploadId: string) => Promise<void>
   /** The operator confirmed a directory (the selection, else the listed level). */
   onOpen: (path: string) => void
   /** Close without picking (mask, Escape, Cancel). */
@@ -95,6 +107,41 @@ const PARENT_LEG_WAIT_MS = 200
  * a pause reads as "the list moved with me".
  */
 const DRAFT_PREVIEW_DEBOUNCE_MS = 250
+
+/** Browser file with the relative path populated by an input carrying `webkitdirectory`. */
+type DirectoryFile = File & { readonly webkitRelativePath: string }
+
+/** Encode one bounded browser chunk without building a whole-file binary string. */
+function base64(bytes: Uint8Array): string {
+  let binary = ''
+  const batchBytes = 0x8000
+  for (let offset = 0; offset < bytes.byteLength; offset += batchBytes) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + batchBytes, bytes.byteLength)))
+  }
+  return btoa(binary)
+}
+
+/** Parse one directory input selection into a common root name and root-relative files. */
+function directorySelection(files: readonly File[]): { name: string; files: { file: File; path: string }[]; totalBytes: number } {
+  const selected = Array.from(files, (file) => {
+    const path = (file as DirectoryFile).webkitRelativePath
+    const segments = path.split('/')
+    if (segments.length < 2 || segments.some(segment => segment === '' || segment === '.' || segment === '..')) {
+      throw new Error(`invalid local directory path: ${path || file.name}`)
+    }
+    const [root, ...relative] = segments
+    /* v8 ignore next -- the length check above proves a root and at least one relative segment. */
+    if (root === undefined) throw new Error(`invalid local directory path: ${path || file.name}`)
+    return { file, root, path: relative.join('/') }
+  })
+  const first = selected[0]
+  if (first === undefined) throw new Error('the selected directory has no files')
+  const name = first.root
+  if (selected.some(item => item.root !== name)) throw new Error('select exactly one local directory')
+  const totalBytes = selected.reduce((sum, item) => sum + item.file.size, 0)
+  if (!Number.isSafeInteger(totalBytes)) throw new Error('the selected directory is too large')
+  return { name, files: selected.map(({ file, path }) => ({ file, path })), totalBytes }
+}
 
 /**
  * Breadcrumb rows for display: inside the home subtree the chain starts at a
@@ -259,7 +306,11 @@ function LevelColumn({ entries, selectedPath, busy, onPick, showHidden, filterPr
  * @param props - owner-controlled browser props.
  * @returns the dialog element (null while closed, via Modal).
  */
-export function DirectoryBrowser({ open, listDirectory, createDirectory, onOpen, onClose, busy, t }: DirectoryBrowserProps) {
+export function DirectoryBrowser({
+  open, listDirectory, createDirectory,
+  beginDirectoryUpload, writeDirectoryUpload, completeDirectoryUpload, abortDirectoryUpload,
+  onOpen, onClose, busy, t,
+}: DirectoryBrowserProps) {
   // Miller state: the listed level, the selected row in it, and the selected
   // folder's own listing (the right column; null while nothing is selected).
   const [parent, setParent] = useState<DirectoryListing | null>(null)
@@ -283,6 +334,8 @@ export function DirectoryBrowser({ open, listDirectory, createDirectory, onOpen,
   const [folderDraft, setFolderDraft] = useState<string | null>(null)
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null)
+  const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const requestSeq = useRef(0)
   // The in-flight listing's controller: superseding intent aborts the wire
   // request too — the Host stops scanning — instead of only discarding the
@@ -583,6 +636,7 @@ export function DirectoryBrowser({ open, listDirectory, createDirectory, onOpen,
     setPathDraft(null)
     setFolderDraft(null)
     setCreateError(null)
+    setUploadProgress(null)
     // A close mid-flight (failed Enter, then Cancel) may leave refocus
     // flags armed; retire them so a later render cannot consume them.
     refocusPick.current = false
@@ -593,6 +647,66 @@ export function DirectoryBrowser({ open, listDirectory, createDirectory, onOpen,
   const targetPath = selected?.path ?? parent?.path ?? null
   const targetName = selected?.name
     ?? (parent === null ? '' : (displayCrumbs(parent, t('browser.home')).at(-1)?.name ?? parent.path))
+
+  /** Upload one browser-selected folder, then adopt its completed root as the picked Workspace. */
+  const uploadDirectory = async (files: readonly File[]): Promise<void> => {
+    if (targetPath === null || uploadProgress !== null) return
+    let uploadId: string | undefined
+    const generation = openGeneration.current
+    try {
+      const selection = directorySelection(files)
+      setError(null)
+      setUploadProgress({ done: 0, total: selection.files.length })
+      const session = await beginDirectoryUpload({
+        parentPath: targetPath,
+        name: selection.name,
+        fileCount: selection.files.length,
+        totalBytes: selection.totalBytes,
+      })
+      uploadId = session.uploadId
+      for (const [index, item] of selection.files.entries()) {
+        let offset = 0
+        if (item.file.size === 0) {
+          offset = await writeDirectoryUpload({
+            uploadId, path: item.path, offset: 0, data: '', done: true,
+          })
+        } else {
+          while (offset < item.file.size) {
+            const end = Math.min(offset + session.maxChunkBytes, item.file.size)
+            const bytes = new Uint8Array(await item.file.slice(offset, end).arrayBuffer())
+            const acknowledged = await writeDirectoryUpload({
+              uploadId,
+              path: item.path,
+              offset,
+              data: base64(bytes),
+              done: end === item.file.size,
+            })
+            if (acknowledged !== end) throw new Error(`upload offset mismatch for ${item.path}`)
+            offset = acknowledged
+          }
+        }
+        if (offset !== item.file.size) throw new Error(`upload size mismatch for ${item.path}`)
+        if (generation === openGeneration.current) setUploadProgress({ done: index + 1, total: selection.files.length })
+      }
+      const uploadedPath = await completeDirectoryUpload(uploadId)
+      uploadId = undefined
+      if (generation !== openGeneration.current) return
+      setUploadProgress(null)
+      onOpen(uploadedPath)
+    } catch (reason: unknown) {
+      if (uploadId !== undefined) {
+        try {
+          await abortDirectoryUpload(uploadId)
+        } catch {
+          // The original failure is the actionable one; the Host expiry sweep
+          // remains the cleanup backstop if an explicit abort cannot land.
+        }
+      }
+      if (generation !== openGeneration.current) return
+      setUploadProgress(null)
+      setError(failureText(reason))
+    }
+  }
 
   const confirmCreate = (): void => {
     /* v8 ignore next -- reentry fence: the nested dialog only renders with a target and disables while creating. */
@@ -743,7 +857,7 @@ export function DirectoryBrowser({ open, listDirectory, createDirectory, onOpen,
   // The nested create dialog owns the interaction while open: Modal has no
   // focus trap, so every parent control goes inert (Shift-Tab or AT must not
   // close, adopt, or retarget underneath the child).
-  const parentInert = busy || folderDraft !== null
+  const parentInert = busy || folderDraft !== null || uploadProgress !== null
   // An uncommitted path draft makes targetPath stale relative to the header:
   // committing actions must not act on the previous selection/listing while
   // a different path is displayed.
@@ -950,6 +1064,11 @@ export function DirectoryBrowser({ open, listDirectory, createDirectory, onOpen,
           {(parent?.truncated === true || child?.truncated === true)
           && <div className={css.status} role="status">{t('browser.truncated')}</div>}
           {error !== null && <div className={css.error} role="alert">{error}</div>}
+          {uploadProgress !== null && (
+            <div className={css.status} role="status">
+              {t('browser.uploading', { done: uploadProgress.done, total: uploadProgress.total })}
+            </div>
+          )}
         </div>
         <div className={css.footerBar}>
           <Button
@@ -962,6 +1081,37 @@ export function DirectoryBrowser({ open, listDirectory, createDirectory, onOpen,
             }}
           >
             {t('browser.newFolder')}
+          </Button>
+          <input
+            ref={uploadInputRef}
+            className={css.directoryInput}
+            type="file"
+            multiple
+            // React's intrinsic input type does not expose Chromium's
+            // directory-selection extension; the DOM property is applied by
+            // the click handler below as well for engines that require it.
+            {...({ webkitdirectory: '' } as Record<string, string>)}
+            onChange={(event) => {
+              // FileList is live: clearing the input also empties that same
+              // object. Snapshot it first so the async upload still owns the
+              // browser-selected files after the chooser is reset.
+              const files = event.currentTarget.files === null ? [] : Array.from(event.currentTarget.files)
+              event.currentTarget.value = ''
+              if (files.length > 0) void uploadDirectory(files)
+            }}
+          />
+          <Button
+            variant="outline"
+            icon={<IconProjectAddOutline16 size={14} />}
+            disabled={targetPath === null || loading || parentInert || draftPending}
+            onClick={() => {
+              const input = uploadInputRef.current
+              if (input === null) return
+              input.webkitdirectory = true
+              input.click()
+            }}
+          >
+            {t('browser.uploadFolder')}
           </Button>
           <button
             type="button"

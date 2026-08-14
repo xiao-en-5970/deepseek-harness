@@ -2,7 +2,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  DirectoryListing, IApiClient, RpcError,
+  DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart, IApiClient, RpcError,
   SessionId, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SnapshotStore } from '../contract/store.ts'
@@ -236,6 +236,33 @@ export class WorkspaceRuntime implements IWorkspaces {
     const response = await this.api.host.createDirectory({ path, name })
     if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
     return response.result.value.path
+  }
+
+  /** Begin one bounded local-directory upload under an existing Host path. */
+  async beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession> {
+    const response = await this.api.host.beginDirectoryUpload(input)
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+    return response.result.value
+  }
+
+  /** Append one ordered base64 chunk and return the next acknowledged offset. */
+  async writeDirectoryUpload(input: DirectoryUploadChunk): Promise<number> {
+    const response = await this.api.host.writeDirectoryUpload(input)
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+    return response.result.value.offset
+  }
+
+  /** Commit an upload after every manifest file and byte has landed. */
+  async completeDirectoryUpload(uploadId: string): Promise<string> {
+    const response = await this.api.host.completeDirectoryUpload({ uploadId })
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+    return response.result.value.path
+  }
+
+  /** Remove an incomplete upload root; the Host makes unknown ids idempotent. */
+  async abortDirectoryUpload(uploadId: string): Promise<void> {
+    const response = await this.api.host.abortDirectoryUpload({ uploadId })
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
   }
 
   /**

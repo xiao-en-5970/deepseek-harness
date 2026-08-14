@@ -70,7 +70,8 @@ export const Config: z<ConnectionConfig> = z.object({
  * Methods gated to loopback even on a trusted-host deployment. Native dialogs
  * act on the host machine; the settings and credential domains mutate the
  * user's configuration and secret store, and READING them is equally
- * privileged — `settings.describe` returns every exposed namespace's
+ * privileged — directory upload writes caller-supplied bytes to the Host;
+ * `settings.describe` returns every exposed namespace's
  * configuration and `credentials.describe` reports whether an arbitrary
  * environment-variable name is configured and where from, which is
  * reconnaissance no anonymous caller should have. `trustedHosts` is a
@@ -107,6 +108,10 @@ const PRIVILEGED_METHODS = new Set([
   'agentPreset.remove',
   'host.pickDirectory',
   'host.openPath',
+  'host.beginDirectoryUpload',
+  'host.writeDirectoryUpload',
+  'host.completeDirectoryUpload',
+  'host.abortDirectoryUpload',
   'settings.describe',
   'settings.openDocument',
   'settings.update',

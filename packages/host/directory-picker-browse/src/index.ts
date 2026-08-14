@@ -1,56 +1,55 @@
 /**
  * Browse backend of the directory-picker seam: registers `ctx.directoryPicker`
- * with the `browse` capability — one-level directory listing and child-directory
- * creation over the host filesystem via Node's stdlib (which already carries
- * the per-OS adaptation). Nothing renders on the host display, so this backend
- * serves remote clients the dialog backend cannot. Policy decisions (hidden
- * entries flagged but returned, symlinks followed, whole-filesystem scope) are
- * recorded in the directory-picker seam Agent Note.
+ * with the `browse` capability — one-level directory listing, child-directory
+ * creation, and bounded directory upload over the host filesystem via Node's
+ * stdlib. Nothing renders on the host display, so this backend serves remote
+ * clients the dialog backend cannot. Browse policy is recorded in the
+ * directory-picker seam Agent Note; upload policy in the browser-directory-
+ * upload Agent Note.
  * @module @deepseek-ai/dsh-host-directory-picker-browse
  */
 
-import { mkdir, opendir, stat } from 'node:fs/promises'
+import { mkdir, opendir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, join, posix, resolve, win32 } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import {
   DirectoryPicker, DirectoryPickerError,
 } from '@deepseek-ai/dsh-host-directory-picker'
 import type {
-  DirectoryEntry, DirectoryListing, DirectoryPickerCapability,
+  DirectoryEntry, DirectoryListing, DirectoryPickerCapability, DirectoryUploadChunk,
+  DirectoryUploadProgress, DirectoryUploadSession, DirectoryUploadStart,
 } from '@deepseek-ai/dsh-host-directory-picker'
+import { fullyQualified, insidePath } from './path.ts'
+import { DirectoryUploadManager } from './upload.ts'
+
+export { fullyQualified } from './path.ts'
+
+const DEFAULT_UPLOAD_ROOT = ''
+// Base64 expands decoded data by 4/3 before the JSON carrier adds its own
+// fields. A 512 KiB decoded default keeps the complete request below the
+// common 1 MiB reverse-proxy body limit with ample metadata headroom.
+const DEFAULT_MAX_UPLOAD_CHUNK_BYTES = 512 * 1024
+const DEFAULT_MAX_UPLOAD_FILE_BYTES = 2 * 1024 * 1024 * 1024
+const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
+const DEFAULT_MAX_UPLOAD_FILES = 10_000
+const DEFAULT_UPLOAD_LIFETIME_MS = 30 * 60 * 1000
 
 /**
  * Ancestor chain from the filesystem root to `target` inclusive — the
  * breadcrumb rows of a listing, every one a jump target.
  */
-function ancestryCrumbs(target: string): DirectoryEntry[] {
+function ancestryCrumbs(target: string, root?: string): DirectoryEntry[] {
   const crumbs: DirectoryEntry[] = []
   let current = target
   for (;;) {
     const parent = dirname(current)
     // basename of a root is '' — label the root crumb by its full path ('/', 'C:\').
     crumbs.unshift({ name: parent === current ? current : basename(current), path: current, hidden: false })
-    if (parent === current) return crumbs
+    if (current === root || parent === current) return crumbs
     current = parent
   }
-}
-
-/**
- * True when the path names one fixed filesystem location regardless of
- * process state: POSIX-absolute on POSIX; on Windows only drive-qualified
- * (`C:\…`) or complete UNC (`\\server\share…`) forms. Rooted drive-less
- * forms (`\foo`, `/foo`) and incomplete UNC prefixes (`\\`, `\\server`)
- * pass `isAbsolute` yet still resolve against the process's current drive.
- * @param path - candidate path.
- * @param platform - replaces `process.platform` for deterministic tests.
- * @returns whether the path is fully qualified on the platform.
- */
-export function fullyQualified(path: string, platform: NodeJS.Platform = process.platform): boolean {
-  return platform === 'win32'
-    ? win32.isAbsolute(path) && /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/.test(path)
-    : posix.isAbsolute(path)
 }
 
 /** One streamed listing candidate: the dirent facts a row needs, nothing else retained. */
@@ -181,6 +180,20 @@ async function directoryRow(
 export interface Config {
   /** Complete-result bound of one listing level; see {@link BrowseDirectoryPicker.Config}. */
   maxEntries: number
+  /** Fully qualified subtree exposed by listing and directory creation; omitted permits the Host filesystem. */
+  browseRoot?: string
+  /** Fully qualified subtree accepting uploads; blank follows `browseRoot`, then the Host account's home directory. */
+  uploadRoot?: string
+  /** Maximum decoded bytes in one upload RPC chunk; defaults to 512 KiB so base64 JSON fits common 1 MiB proxy limits. */
+  maxUploadChunkBytes?: number
+  /** Maximum decoded bytes in one uploaded file. */
+  maxUploadFileBytes?: number
+  /** Maximum decoded bytes across one directory upload. */
+  maxUploadBytes?: number
+  /** Maximum file count across one directory upload. */
+  maxUploadFiles?: number
+  /** Idle lifetime before an incomplete upload root is removed. */
+  uploadLifetimeMs?: number
 }
 
 /** The `ctx.directoryPicker` browse implementation (stable capability object per service life). */
@@ -194,16 +207,54 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
    */
   static Config: z<Config> = z.object({
     maxEntries: z.natural().min(1).default(1000),
+    browseRoot: z.string(),
+    uploadRoot: z.string().default(DEFAULT_UPLOAD_ROOT),
+    maxUploadChunkBytes: z.natural().min(1).default(DEFAULT_MAX_UPLOAD_CHUNK_BYTES),
+    maxUploadFileBytes: z.natural().min(1).default(DEFAULT_MAX_UPLOAD_FILE_BYTES),
+    maxUploadBytes: z.natural().min(1).default(DEFAULT_MAX_UPLOAD_BYTES),
+    maxUploadFiles: z.natural().min(1).default(DEFAULT_MAX_UPLOAD_FILES),
+    uploadLifetimeMs: z.natural().min(1).default(DEFAULT_UPLOAD_LIFETIME_MS),
   })
+
+  private readonly uploads: DirectoryUploadManager
+  private readonly configuredBrowseRoot: string | undefined
 
   private readonly browseCapability: DirectoryPickerCapability = {
     kind: 'browse',
     list: (path, signal) => this.list(path, signal),
     createDirectory: (path, name) => this.createDirectory(path, name),
+    beginDirectoryUpload: input => this.beginDirectoryUpload(input),
+    writeDirectoryUpload: input => this.writeDirectoryUpload(input),
+    completeDirectoryUpload: uploadId => this.completeDirectoryUpload(uploadId),
+    abortDirectoryUpload: uploadId => this.abortDirectoryUpload(uploadId),
   }
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx)
+    if (config.browseRoot !== undefined && !fullyQualified(config.browseRoot)) {
+      throw new Error(`directory browse root must be fully qualified: ${config.browseRoot}`)
+    }
+    this.configuredBrowseRoot = config.browseRoot === undefined ? undefined : resolve(config.browseRoot)
+    const uploadConfig = {
+      uploadRoot: config.uploadRoot === undefined || config.uploadRoot === DEFAULT_UPLOAD_ROOT
+        ? this.configuredBrowseRoot ?? DEFAULT_UPLOAD_ROOT
+        : config.uploadRoot,
+      maxUploadChunkBytes: config.maxUploadChunkBytes ?? DEFAULT_MAX_UPLOAD_CHUNK_BYTES,
+      maxUploadFileBytes: config.maxUploadFileBytes ?? DEFAULT_MAX_UPLOAD_FILE_BYTES,
+      maxUploadBytes: config.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES,
+      maxUploadFiles: config.maxUploadFiles ?? DEFAULT_MAX_UPLOAD_FILES,
+      uploadLifetimeMs: config.uploadLifetimeMs ?? DEFAULT_UPLOAD_LIFETIME_MS,
+    }
+    this.uploads = new DirectoryUploadManager(uploadConfig)
+    ctx.effect(() => {
+      const sweepMs = Math.min(uploadConfig.uploadLifetimeMs, 60_000)
+      const timer = setInterval(() => { void this.uploads.expire() }, sweepMs)
+      timer.unref()
+      return async () => {
+        clearInterval(timer)
+        await this.uploads.dispose()
+      }
+    }, 'directory-picker-browse: incomplete upload cleanup')
   }
 
   /**
@@ -215,14 +266,27 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
   }
 
   private async list(path?: string, signal?: AbortSignal): Promise<DirectoryListing> {
-    const home = homedir()
+    let home = this.configuredBrowseRoot ?? homedir()
     // The seam contract takes fully qualified paths only; resolve() would
     // silently rebase a relative or empty wire value under the host process
     // cwd (or, for rooted drive-less Windows forms, its current drive).
     if (path !== undefined && !fullyQualified(path)) {
       throw new DirectoryPickerError('directory-unreadable', path, `cannot list "${path}": not a fully qualified path`)
     }
-    const target = resolve(path ?? home)
+    let target = resolve(path ?? home)
+    if (this.configuredBrowseRoot !== undefined) {
+      try {
+        const [allowed, candidate] = await Promise.all([realpath(this.configuredBrowseRoot), realpath(target)])
+        if (!insidePath(allowed, candidate)) {
+          throw new DirectoryPickerError('directory-unreadable', candidate, `cannot list outside ${allowed}`)
+        }
+        home = allowed
+        target = candidate
+      } catch (error: unknown) {
+        if (error instanceof DirectoryPickerError) throw error
+        throw new DirectoryPickerError('directory-unreadable', target, `cannot list ${target}: ${messageOf(error)}`)
+      }
+    }
     // Stream the level (opendir, one dirent at a time) into a name-sorted
     // window of maxEntries + 1 candidates: memory stays bounded no matter how
     // many children the directory holds, the window keeps the name-sorted
@@ -293,7 +357,8 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
       }
       entries.push(row)
     }
-    return { path: target, home, crumbs: ancestryCrumbs(target), entries, truncated }
+    const crumbRoot = this.configuredBrowseRoot === undefined ? undefined : home
+    return { path: target, home, crumbs: ancestryCrumbs(target, crumbRoot), entries, truncated }
   }
 
   private async createDirectory(path: string, name: string): Promise<string> {
@@ -302,7 +367,19 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
     if (!fullyQualified(path)) {
       throw new DirectoryPickerError('directory-create-failed', path, `cannot create under "${path}": not a fully qualified parent path`)
     }
-    const parent = resolve(path)
+    let parent = resolve(path)
+    if (this.configuredBrowseRoot !== undefined) {
+      try {
+        const [allowed, candidate] = await Promise.all([realpath(this.configuredBrowseRoot), realpath(parent)])
+        if (!insidePath(allowed, candidate)) {
+          throw new DirectoryPickerError('directory-create-failed', candidate, `cannot create outside ${allowed}`)
+        }
+        parent = candidate
+      } catch (error: unknown) {
+        if (error instanceof DirectoryPickerError) throw error
+        throw new DirectoryPickerError('directory-create-failed', parent, `cannot create under ${parent}: ${messageOf(error)}`)
+      }
+    }
     // The backend owns segment validation (the wire schema also refuses these,
     // but direct service consumers must hit the same fence).
     if (name.trim() === '' || name === '.' || name === '..' || /[/\\]/.test(name)) {
@@ -320,5 +397,21 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
       }
       throw new DirectoryPickerError('directory-create-failed', target, `cannot create ${target}: ${messageOf(error)}`)
     }
+  }
+
+  private beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession> {
+    return this.uploads.begin(input)
+  }
+
+  private writeDirectoryUpload(input: DirectoryUploadChunk): Promise<DirectoryUploadProgress> {
+    return this.uploads.write(input)
+  }
+
+  private completeDirectoryUpload(uploadId: string): Promise<string> {
+    return this.uploads.complete(uploadId)
+  }
+
+  private abortDirectoryUpload(uploadId: string): Promise<void> {
+    return this.uploads.abort(uploadId)
   }
 }

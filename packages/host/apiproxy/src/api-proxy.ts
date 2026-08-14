@@ -3005,6 +3005,71 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         }
       },
 
+      async beginDirectoryUpload(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.beginDirectoryUpload needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          return ok(request, await capability.beginDirectoryUpload(request.payload))
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
+      async writeDirectoryUpload(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.writeDirectoryUpload needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          return ok(request, await capability.writeDirectoryUpload(request.payload))
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
+      async completeDirectoryUpload(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.completeDirectoryUpload needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          return ok(request, { path: await capability.completeDirectoryUpload(request.payload.uploadId) })
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
+      async abortDirectoryUpload(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.abortDirectoryUpload needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          await capability.abortDirectoryUpload(request.payload.uploadId)
+          return ok(request, { aborted: true })
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
       async openPath(request, signal) {
         return openPath(request, request.payload.path, signal)
       },

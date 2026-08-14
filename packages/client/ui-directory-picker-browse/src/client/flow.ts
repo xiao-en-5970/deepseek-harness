@@ -5,7 +5,9 @@
  */
 import { createElement } from 'react'
 import type { ReactElement } from 'react'
-import type { DirectoryListing } from '@deepseek-ai/dsh-client-runtime/client'
+import type {
+  DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import type { Translate } from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: the owner contract of the directory-flow holes.
 import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspace/client'
@@ -17,6 +19,14 @@ export interface BrowseFlowInjected {
   listDirectory: (path?: string, signal?: AbortSignal) => Promise<DirectoryListing>
   /** Create one child directory under an existing parent. */
   createDirectory: (path: string, name: string) => Promise<string>
+  /** Begin one bounded browser-to-host directory upload. */
+  beginDirectoryUpload: (input: DirectoryUploadStart) => Promise<DirectoryUploadSession>
+  /** Append one ordered base64 chunk. */
+  writeDirectoryUpload: (input: DirectoryUploadChunk) => Promise<number>
+  /** Commit a complete upload. */
+  completeDirectoryUpload: (uploadId: string) => Promise<string>
+  /** Remove an incomplete upload root. */
+  abortDirectoryUpload: (uploadId: string) => Promise<void>
   /** Localized dialog copy (this package's namespace). */
   t: Translate
 }
@@ -24,7 +34,7 @@ export interface BrowseFlowInjected {
 /**
  * Flow occupant: adapts the hole's owner conversation onto the browser
  * dialog — a confirmed directory is the picked path, dismissal is the
- * cancellation. Browse failures (unreadable targets, create conflicts) stay
+ * cancellation. Browse failures (unreadable targets, create/upload conflicts) stay
  * inside the dialog's own alert surfaces, so the owner's `onError` arm is
  * never driven by this occupant.
  * @param props - owner conversation plus the injected browse face.
@@ -36,6 +46,10 @@ export function BrowseDirectoryFlow(props: DirectoryFlowOwnerProps & BrowseFlowI
     busy: props.busy,
     listDirectory: props.listDirectory,
     createDirectory: props.createDirectory,
+    beginDirectoryUpload: props.beginDirectoryUpload,
+    writeDirectoryUpload: props.writeDirectoryUpload,
+    completeDirectoryUpload: props.completeDirectoryUpload,
+    abortDirectoryUpload: props.abortDirectoryUpload,
     t: props.t,
     onOpen: props.onPicked,
     onClose: props.onCancel,

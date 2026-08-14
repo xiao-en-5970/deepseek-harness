@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { DirectoryListing } from '@deepseek-ai/dsh-client-runtime/client'
+import type { DirectoryListing, DirectoryUploadChunk } from '@deepseek-ai/dsh-client-runtime/client'
 import { DirectoryBrowseError } from '@deepseek-ai/dsh-client-runtime/client'
 import { DirectoryBrowser } from '../src/client/DirectoryBrowser.tsx'
 
@@ -89,12 +89,26 @@ function listingFor(path?: string): DirectoryListing {
 function mount(overrides: Partial<Parameters<typeof DirectoryBrowser>[0]> = {}) {
   const listDirectory = vi.fn(async (path?: string) => listingFor(path))
   const createDirectory = vi.fn(async (path: string, name: string) => `${path}/${name}`)
+  const beginDirectoryUpload = vi.fn(async (input: { parentPath: string; name: string }) => ({
+    uploadId: '00000000-0000-4000-8000-000000000001',
+    path: `${input.parentPath}/${input.name}`,
+    maxChunkBytes: 2,
+  }))
+  const writeDirectoryUpload = vi.fn(async (input: DirectoryUploadChunk) => (
+    input.offset + (input.data === '' ? 0 : atob(input.data).length)
+  ))
+  const completeDirectoryUpload = vi.fn(async () => `${HOME}/uploaded`)
+  const abortDirectoryUpload = vi.fn(async () => {})
   const onOpen = vi.fn()
   const onClose = vi.fn()
   const props = {
     open: true,
     listDirectory,
     createDirectory,
+    beginDirectoryUpload,
+    writeDirectoryUpload,
+    completeDirectoryUpload,
+    abortDirectoryUpload,
     onOpen,
     onClose,
     busy: false,
@@ -102,7 +116,11 @@ function mount(overrides: Partial<Parameters<typeof DirectoryBrowser>[0]> = {}) 
     ...overrides,
   }
   const view = render(<DirectoryBrowser {...props} />)
-  return { view, props, listDirectory, createDirectory, onOpen, onClose }
+  return {
+    view, props, listDirectory, createDirectory,
+    beginDirectoryUpload, writeDirectoryUpload, completeDirectoryUpload, abortDirectoryUpload,
+    onOpen, onClose,
+  }
 }
 
 /** The rendered level columns, left-to-right. */
@@ -153,6 +171,63 @@ describe('DirectoryBrowser', () => {
     b.view.rerender(<DirectoryBrowser {...b.props} open />)
     await waitFor(() => { expect(screen.getByRole('listitem')).toBeTruthy() })
     expect(screen.queryByText('.config')).toBeNull()
+  })
+
+  it('uploads one local folder in server-bounded chunks and adopts the completed root', async () => {
+    const b = mount()
+    await waitFor(() => { expect(screen.getByRole('listitem')).toBeTruthy() })
+    expect(screen.getByRole('button', { name: 'browser.uploadFolder' })).toBeTruthy()
+    const main = new File(['hello'], 'main.txt')
+    Object.defineProperty(main, 'webkitRelativePath', { value: 'sample/src/main.txt' })
+    const empty = new File([], 'empty.txt')
+    Object.defineProperty(empty, 'webkitRelativePath', { value: 'sample/empty.txt' })
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    // A browser FileList is live: resetting the input empties the same object.
+    // Model that behavior so this catches clearing before snapshotting.
+    let selectedFiles: File[] = [main, empty]
+    const liveFiles = {
+      get 0() { return selectedFiles[0] },
+      get 1() { return selectedFiles[1] },
+      get length() { return selectedFiles.length },
+      item: (index: number) => selectedFiles[index] ?? null,
+    } as unknown as FileList
+    Object.defineProperty(input, 'files', { configurable: true, get: () => liveFiles })
+    Object.defineProperty(input, 'value', {
+      configurable: true,
+      get: () => '',
+      set: (value: string) => { if (value === '') selectedFiles = [] },
+    })
+    fireEvent.change(input)
+    await waitFor(() => { expect(b.onOpen).toHaveBeenCalledWith(`${HOME}/uploaded`) })
+    expect(b.beginDirectoryUpload).toHaveBeenCalledWith({
+      parentPath: HOME, name: 'sample', fileCount: 2, totalBytes: 5,
+    })
+    expect(b.writeDirectoryUpload.mock.calls.map(([chunk]) => ({
+      path: chunk.path, offset: chunk.offset, data: chunk.data, done: chunk.done,
+    }))).toEqual([
+      { path: 'src/main.txt', offset: 0, data: 'aGU=', done: false },
+      { path: 'src/main.txt', offset: 2, data: 'bGw=', done: false },
+      { path: 'src/main.txt', offset: 4, data: 'bw==', done: true },
+      { path: 'empty.txt', offset: 0, data: '', done: true },
+    ])
+    expect(b.completeDirectoryUpload).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001')
+    expect(b.abortDirectoryUpload).not.toHaveBeenCalled()
+  })
+
+  it('aborts an incomplete upload and keeps the dialog open on a chunk failure', async () => {
+    const failure = new DirectoryBrowseError({
+      code: 'directory-upload-failed', message: 'disk full', details: { path: '/home/u/broken' },
+    })
+    const b = mount({ writeDirectoryUpload: vi.fn(async () => { throw failure }) })
+    await waitFor(() => { expect(screen.getByRole('listitem')).toBeTruthy() })
+    const file = new File([], 'empty.txt')
+    Object.defineProperty(file, 'webkitRelativePath', { value: 'broken/empty.txt' })
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    fireEvent.change(input, { target: { files: [file] } })
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe('disk full') })
+    expect(b.abortDirectoryUpload).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001')
+    expect(b.onOpen).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'browser.uploadFolder' })).toBeTruthy()
   })
 
   it('selects a row into the two-pane view: children preview right, crumbs follow the selection', async () => {

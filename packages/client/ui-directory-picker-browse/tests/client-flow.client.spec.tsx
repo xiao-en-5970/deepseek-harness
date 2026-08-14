@@ -34,13 +34,26 @@ async function bench() {
   ctx.provide('locale', new LocaleRuntime(ctx))
   const listDirectory = vi.fn(async (): Promise<DirectoryListing> => homeListing)
   const createDirectory = vi.fn(async (path: string, name: string) => `${path}/${name}`)
-  ctx.provide('workspaces', { listDirectory, createDirectory } as never)
+  const beginDirectoryUpload = vi.fn(async () => ({
+    uploadId: '00000000-0000-4000-8000-000000000001', path: `${HOME}/upload`, maxChunkBytes: 1024,
+  }))
+  const writeDirectoryUpload = vi.fn(async () => 0)
+  const completeDirectoryUpload = vi.fn(async () => `${HOME}/upload`)
+  const abortDirectoryUpload = vi.fn(async () => {})
+  ctx.provide('workspaces', {
+    listDirectory, createDirectory,
+    beginDirectoryUpload, writeDirectoryUpload, completeDirectoryUpload, abortDirectoryUpload,
+  } as never)
   const slots = ctx.get('slots') as SlotRegistry
   const declare = () => slots.register({
     name: 'root',
     children: Object.fromEntries(HOLES.map(name => [name, { kind: 'single', scope: 'root' }])),
   } as never, () => null)
-  return { ctx, slots, listDirectory, createDirectory, declare }
+  return {
+    ctx, slots, listDirectory, createDirectory,
+    beginDirectoryUpload, writeDirectoryUpload, completeDirectoryUpload, abortDirectoryUpload,
+    declare,
+  }
 }
 
 function owner(overrides: Partial<DirectoryFlowOwnerProps> = {}): DirectoryFlowOwnerProps {
@@ -48,6 +61,17 @@ function owner(overrides: Partial<DirectoryFlowOwnerProps> = {}): DirectoryFlowO
     open: true, busy: false,
     onPicked: vi.fn(), onCancel: vi.fn(), onError: vi.fn(),
     ...overrides,
+  }
+}
+
+function uploadFace() {
+  return {
+    beginDirectoryUpload: vi.fn(async () => ({
+      uploadId: '00000000-0000-4000-8000-000000000001', path: `${HOME}/upload`, maxChunkBytes: 1024,
+    })),
+    writeDirectoryUpload: vi.fn(async () => 0),
+    completeDirectoryUpload: vi.fn(async () => `${HOME}/upload`),
+    abortDirectoryUpload: vi.fn(async () => {}),
   }
 }
 
@@ -181,11 +205,23 @@ describe('directory-picker-browse client half', () => {
     const injected = (entry.inject as () => {
       listDirectory: (path?: string) => Promise<DirectoryListing>
       createDirectory: (path: string, name: string) => Promise<string>
+      beginDirectoryUpload: (input: { parentPath: string; name: string; fileCount: number; totalBytes: number }) => Promise<unknown>
+      writeDirectoryUpload: (input: { uploadId: string; path: string; offset: number; data: string; done: boolean }) => Promise<number>
+      completeDirectoryUpload: (uploadId: string) => Promise<string>
+      abortDirectoryUpload: (uploadId: string) => Promise<void>
     })()
     await expect(injected.listDirectory()).resolves.toBe(homeListing)
     await expect(injected.createDirectory(HOME, 'fresh')).resolves.toBe(`${HOME}/fresh`)
+    await injected.beginDirectoryUpload({ parentPath: HOME, name: 'upload', fileCount: 1, totalBytes: 0 })
+    await injected.writeDirectoryUpload({ uploadId: 'u', path: 'a', offset: 0, data: '', done: true })
+    await injected.completeDirectoryUpload('u')
+    await injected.abortDirectoryUpload('u')
     expect(b.listDirectory).toHaveBeenCalledOnce()
     expect(b.createDirectory).toHaveBeenCalledWith(HOME, 'fresh')
+    expect(b.beginDirectoryUpload).toHaveBeenCalledOnce()
+    expect(b.writeDirectoryUpload).toHaveBeenCalledOnce()
+    expect(b.completeDirectoryUpload).toHaveBeenCalledWith('u')
+    expect(b.abortDirectoryUpload).toHaveBeenCalledWith('u')
   })
 
   it('adapts the owner conversation onto the dialog: confirm picks, dismissal cancels', async () => {
@@ -197,6 +233,7 @@ describe('directory-picker-browse client half', () => {
         {...props}
         listDirectory={listDirectory}
         createDirectory={vi.fn(async () => '')}
+        {...uploadFace()}
         t={t}
       />,
     )
@@ -216,6 +253,7 @@ describe('directory-picker-browse client half', () => {
         {...owner({ open: false })}
         listDirectory={vi.fn(async () => homeListing)}
         createDirectory={vi.fn(async () => '')}
+        {...uploadFace()}
         t={key => key}
       />,
     )

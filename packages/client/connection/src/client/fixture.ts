@@ -1560,6 +1560,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
     updatedAt: fixtureEpoch,
   }]
   let nextWorkspace = 1
+  let nextDirectoryUpload = 1
   // Registry-global archive set mirroring the host: archived sessions keep
   // their workspace accounting slot and only grouping surfaces hide them.
   const archivedSessionIds: SessionId[] = []
@@ -2561,6 +2562,16 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         directoryTree.set(target, [])
         return ok(request, { path: target })
       },
+      beginDirectoryUpload: request => ok(request, {
+        uploadId: `00000000-0000-4000-8000-${String(nextDirectoryUpload++).padStart(12, '0')}`,
+        path: `${request.payload.parentPath}/${request.payload.name}`,
+        maxChunkBytes: 1024 * 1024,
+      }),
+      writeDirectoryUpload: request => ok(request, {
+        offset: request.payload.offset + (request.payload.data === '' ? 0 : atob(request.payload.data).length),
+      }),
+      completeDirectoryUpload: request => ok(request, { path: `${FIXTURE_HOME}/uploaded-project` }),
+      abortDirectoryUpload: request => ok(request, { aborted: true as const }),
       openPath: request => ok(request, { opened: true as const }),
     },
     workspace: {
@@ -3097,6 +3108,10 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'host.pickDirectory': return this.api.host.pickDirectory(request, new AbortController().signal)
       case 'host.listDirectory': return this.api.host.listDirectory(request, new AbortController().signal)
       case 'host.createDirectory': return this.api.host.createDirectory(request)
+      case 'host.beginDirectoryUpload': return this.api.host.beginDirectoryUpload(request)
+      case 'host.writeDirectoryUpload': return this.api.host.writeDirectoryUpload(request)
+      case 'host.completeDirectoryUpload': return this.api.host.completeDirectoryUpload(request)
+      case 'host.abortDirectoryUpload': return this.api.host.abortDirectoryUpload(request)
       case 'host.openPath': return this.api.host.openPath(request, new AbortController().signal)
       case 'workspace.list': return this.api.workspace.list(request)
       case 'workspace.create': return this.api.workspace.create(request)

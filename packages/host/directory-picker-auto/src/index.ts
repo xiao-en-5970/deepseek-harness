@@ -12,6 +12,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 // Empty type imports carry the `loader` and `webServer` Context merges for the reads below.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -27,6 +28,19 @@ export { resolveDirectoryPickerBackend } from './resolve.ts'
 export const name = 'directory-picker-auto'
 /** Required services: the effective bind host (`webServer`) and the entry tree the backend mounts into (`loader`). */
 export const inject = ['webServer', 'loader']
+
+/** Deployment policy forwarded only when the adaptive chooser resolves to `browse`. */
+export interface Config {
+  /** Fully qualified subtree exposed to the browser directory picker. */
+  browseRoot?: string
+  /** Fully qualified subtree accepting browser directory uploads. */
+  uploadRoot?: string
+}
+
+export const Config: z<Config> = z.object({
+  browseRoot: z.string(),
+  uploadRoot: z.string(),
+})
 
 /**
  * Host backend package per resolved kind — fixed composition vocabulary, not a
@@ -59,7 +73,7 @@ export const SURFACE_PACKAGES: Record<DirectoryPickerBackendKind, string> = {
  * both faces of the mounted interaction (and their dependents) quiesced.
  * @param ctx - cordis context carrying the injected `webServer` and `loader`.
  */
-export async function apply(ctx: Context): Promise<void> {
+export async function apply(ctx: Context, config: Config): Promise<void> {
   const backend = resolveDirectoryPickerBackend({
     bindHost: ctx.webServer.host,
     platform: process.platform,
@@ -84,7 +98,10 @@ export async function apply(ctx: Context): Promise<void> {
     }
     try {
       for (const name of [BACKEND_PACKAGES[backend], SURFACE_PACKAGES[backend]]) {
-        ids.push(await ctx.loader.create({ name }))
+        const backendConfig = backend === 'browse' && name === BACKEND_PACKAGES.browse
+          ? Object.fromEntries(Object.entries(config).filter((entry): entry is [string, string] => entry[1] !== undefined))
+          : undefined
+        ids.push(await ctx.loader.create({ name, ...backendConfig === undefined ? {} : { config: backendConfig } }))
       }
     } catch (cause) {
       // Setup owns the entries it created until it returns the disposer: leaving

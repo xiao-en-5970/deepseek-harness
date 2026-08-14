@@ -2,7 +2,7 @@
  * Browser half of the browse directory-picker backend: fills ui-workspace's
  * two directory-flow holes with the in-app Select Workspace Directory dialog
  * (figma `Harness` 813-23126 family), driving the node half's
- * `host.listDirectory`/`host.createDirectory` primitives. Mounting this
+ * listing/creation/directory-upload Host primitives. Mounting this
  * package therefore composes both sides of the browse interaction with one
  * cordis.yml row; no client code branches on a capability kind. The dialog's
  * copy is locale-registered here — the flow package owns its own strings.
@@ -36,6 +36,8 @@ export function apply(ctx: ClientContext): void {
         'browser.title': '选择工作区目录',
         'browser.home': '主目录',
         'browser.newFolder': '新建文件夹',
+        'browser.uploadFolder': '上传本地文件夹',
+        'browser.uploading': '正在上传 {done}/{total} 个文件…',
         'browser.folderName': '文件夹名称',
         'browser.createIn': '在"{name}"中新建文件夹',
         'browser.untitledFolder': '未命名文件夹',
@@ -51,6 +53,8 @@ export function apply(ctx: ClientContext): void {
         'browser.title': 'Select Workspace Directory',
         'browser.home': 'Home',
         'browser.newFolder': 'New folder',
+        'browser.uploadFolder': 'Upload local folder',
+        'browser.uploading': 'Uploading {done}/{total} files…',
         'browser.folderName': 'Folder name',
         'browser.createIn': 'New folder in "{name}"',
         'browser.untitledFolder': 'Untitled folder',
@@ -75,6 +79,10 @@ export function apply(ctx: ClientContext): void {
   const injected = (): BrowseFlowInjected => ({
     listDirectory: (path, signal) => ctx.workspaces.listDirectory(path, signal),
     createDirectory: (path, name) => ctx.workspaces.createDirectory(path, name),
+    beginDirectoryUpload: input => ctx.workspaces.beginDirectoryUpload(input),
+    writeDirectoryUpload: input => ctx.workspaces.writeDirectoryUpload(input),
+    completeDirectoryUpload: uploadId => ctx.workspaces.completeDirectoryUpload(uploadId),
+    abortDirectoryUpload: uploadId => ctx.workspaces.abortDirectoryUpload(uploadId),
     t: ctx.locale.bind(LOCALE_NS),
   })
   // Both declaration lifetimes must be live before the pair installs; the
