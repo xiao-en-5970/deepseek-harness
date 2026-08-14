@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { findGeneratedImage, parseWorkerArgs } from './codex-image-worker.mjs'
+import { findGeneratedImage, parseWorkerArgs, runWorkerLoop } from './codex-image-worker.mjs'
 
 let root: string | undefined
 
@@ -16,10 +16,40 @@ describe('local Codex image worker', () => {
     expect(() => parseWorkerArgs([])).toThrow('--sandbox is required')
     expect(() => parseWorkerArgs(['--sandbox', 's', '--queue-root', 'relative'])).toThrow('absolute sandbox path')
     expect(() => parseWorkerArgs(['--sandbox', 's', '--poll-seconds', '0'])).toThrow('positive integer')
+    expect(() => parseWorkerArgs(['--sandbox', 's', '--concurrency', '1.5'])).toThrow('positive integer')
     expect(parseWorkerArgs(['--sandbox', 's', '--once'])).toMatchObject({
-      sandbox: 's', once: true, pollSeconds: 10, leaseSeconds: 60,
+      sandbox: 's', once: true, pollSeconds: 10, leaseSeconds: 60, concurrency: 2,
     })
     expect(parseWorkerArgs(['--', '--sandbox', 's', '--once']).sandbox).toBe('s')
+  })
+
+  it('runs independent image generations in a bounded parallel pool', async () => {
+    const options = parseWorkerArgs(['--sandbox', 's', '--concurrency', '2', '--poll-seconds', '1'])
+    const requests = [
+      { requestId: 'one', prompt: 'one' },
+      { requestId: 'two', prompt: 'two' },
+      { requestId: 'three', prompt: 'three' },
+    ]
+    let active = 0
+    let maximum = 0
+    let completed = 0
+    const loop = runWorkerLoop(options, 'worker', {
+      claim: async () => requests.shift() ?? { status: 'idle' },
+      process: async () => {
+        active++
+        maximum = Math.max(maximum, active)
+        await new Promise(resolveProcess => setTimeout(resolveProcess, 5))
+        active--
+        completed++
+      },
+      sleep: async () => {
+        while (completed < 3) await new Promise(resolveSleep => setTimeout(resolveSleep, 1))
+        throw new Error('test-stop')
+      },
+    })
+    await expect(loop).rejects.toThrow('test-stop')
+    expect(maximum).toBe(2)
+    expect(completed).toBe(3)
   })
 
   it('accepts a bounded PNG copied into the Codex work directory', async () => {

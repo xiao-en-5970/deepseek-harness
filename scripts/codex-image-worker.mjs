@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 export const DEFAULT_POLL_SECONDS = 10
 export const DEFAULT_LEASE_SECONDS = 60
+export const DEFAULT_CONCURRENCY = 2
 export const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024
 export const DEFAULT_CODEX_BIN = '/Applications/ChatGPT.app/Contents/Resources/codex'
 
@@ -203,6 +204,7 @@ export function parseWorkerArgs(argv) {
     queueRoot: '/root/.dsh/codex-image-proxy-shared/v1',
     pollSeconds: DEFAULT_POLL_SECONDS,
     leaseSeconds: DEFAULT_LEASE_SECONDS,
+    concurrency: DEFAULT_CONCURRENCY,
     maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
     bohrBin: process.env.BOHR_BIN || 'bohr',
     codexBin: process.env.CODEX_BIN || DEFAULT_CODEX_BIN,
@@ -222,6 +224,7 @@ export function parseWorkerArgs(argv) {
       case '--queue-root': values.queueRoot = next; break
       case '--poll-seconds': values.pollSeconds = Number(next); break
       case '--lease-seconds': values.leaseSeconds = Number(next); break
+      case '--concurrency': values.concurrency = Number(next); break
       case '--max-image-bytes': values.maxImageBytes = Number(next); break
       case '--bohr-bin': values.bohrBin = next; break
       case '--codex-bin': values.codexBin = next; break
@@ -230,7 +233,7 @@ export function parseWorkerArgs(argv) {
   }
   if (values.sandbox.trim() === '') throw new Error('--sandbox is required')
   if (!posix.isAbsolute(values.queueRoot)) throw new Error('--queue-root must be an absolute sandbox path')
-  for (const [name, value] of [['poll-seconds', values.pollSeconds], ['lease-seconds', values.leaseSeconds], ['max-image-bytes', values.maxImageBytes]]) {
+  for (const [name, value] of [['poll-seconds', values.pollSeconds], ['lease-seconds', values.leaseSeconds], ['concurrency', values.concurrency], ['max-image-bytes', values.maxImageBytes]]) {
     if (!Number.isSafeInteger(value) || value < 1) throw new Error(`--${name} must be a positive integer`)
   }
   return values
@@ -463,6 +466,7 @@ function usage() {
     '  --queue-root <absolute sandbox path>  Shared queue root',
     '  --poll-seconds <n>                    Poll interval (default 10)',
     '  --lease-seconds <n>                   Claim lease (default 60)',
+    '  --concurrency <n>                     Maximum parallel generations (default 2)',
     '  --codex-bin <path>                    Local Codex CLI path',
     '  --bohr-bin <path>                     Local bohr CLI path',
     '  --max-image-bytes <n>                 Returned image limit',
@@ -470,7 +474,56 @@ function usage() {
   ].join('\n')
 }
 
-/** Worker main loop. */
+/**
+ * Fill a bounded local pool from the durable remote queue.
+ *
+ * The injected operations keep the scheduling contract unit-testable without
+ * starting Codex or contacting a sandbox.
+ */
+export async function runWorkerLoop(options, workerId, internals = {}) {
+  const claim = internals.claim ?? (async () => runRemote(options, workerId, 'claim'))
+  const process = internals.process ?? (async request => processRequest(options, workerId, request))
+  const pause = internals.sleep ?? sleep
+  const active = new Set()
+
+  const launch = request => {
+    let task
+    task = process(request)
+      .catch(error => {
+        console.error(`[codex-image-worker] request failed outside handler: ${error instanceof Error ? error.message : String(error)}`)
+      })
+      .finally(() => active.delete(task))
+    active.add(task)
+  }
+
+  for (;;) {
+    let queueIdle = false
+    while (active.size < options.concurrency && !queueIdle) {
+      try {
+        const request = await claim()
+        if (request.status === 'idle') queueIdle = true
+        else launch(request)
+      } catch (error) {
+        console.error(`[codex-image-worker] poll failed: ${error instanceof Error ? error.message : String(error)}`)
+        queueIdle = true
+      }
+      if (options.once) {
+        await Promise.all(active)
+        return 0
+      }
+    }
+
+    if (active.size >= options.concurrency) {
+      await Promise.race(active)
+    } else if (active.size > 0) {
+      await Promise.race([pause(options.pollSeconds * 1_000), ...active])
+    } else {
+      await pause(options.pollSeconds * 1_000)
+    }
+  }
+}
+
+/** Worker entry point. */
 export async function main(argv = process.argv.slice(2)) {
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(usage())
@@ -481,17 +534,8 @@ export async function main(argv = process.argv.slice(2)) {
     await access(options.codexBin).catch(() => { options.codexBin = 'codex' })
   }
   const workerId = `${basename(process.execPath)}-${randomUUID()}`
-  console.log(`[codex-image-worker] sandbox=${options.sandbox} poll=${String(options.pollSeconds)}s worker=${workerId}`)
-  for (;;) {
-    try {
-      const request = await runRemote(options, workerId, 'claim')
-      if (request.status !== 'idle') await processRequest(options, workerId, request)
-    } catch (error) {
-      console.error(`[codex-image-worker] poll failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
-    if (options.once) return 0
-    await sleep(options.pollSeconds * 1_000)
-  }
+  console.log(`[codex-image-worker] sandbox=${options.sandbox} poll=${String(options.pollSeconds)}s concurrency=${String(options.concurrency)} worker=${workerId}`)
+  return runWorkerLoop(options, workerId)
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {

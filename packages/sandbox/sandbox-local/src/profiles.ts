@@ -14,7 +14,12 @@ import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
  * @returns profile arguments before the trailing separator and command argv.
  */
 export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
-  const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent']
+  // Explicitly create the user namespace instead of relying on bwrap's
+  // non-setuid auto-detection. Containerized root commonly lacks CAP_SYS_ADMIN:
+  // without this flag bwrap tries to create the mount namespace in the outer
+  // user namespace and fails with EPERM even though unprivileged user
+  // namespaces are available.
+  const args = ['--unshare-user', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent']
   if (policy.mode === 'workspace-write') {
     args.push('--tmpfs', '/tmp')
     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)

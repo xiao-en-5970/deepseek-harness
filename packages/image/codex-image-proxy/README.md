@@ -36,6 +36,8 @@ pnpm run codex:image-worker -- \
 
 It polls every ten seconds by default. `--once` performs one heartbeat/claim pass for diagnostics. `CODEX_BIN` and `BOHR_BIN` may override executable paths without entering queue records.
 
+The worker runs at most two Codex generations in parallel by default. Set `--concurrency <n>` to another positive bound when local CPU, memory, and Codex rate limits permit it. Queue claims remain atomic and every active request renews its own lease.
+
 ## Queue contract
 
 Requests move atomically from `tenants/<tenant>/pending` to `claimed`. A claim has a renewable lease; a dead worker's stale claim is requeued. Cancellation is a durable marker checked before publish. The image is uploaded to a private temporary path, verified inside the sandbox, renamed to its final path, and only then made visible by an atomic result record. Thus readers never observe a result that points at a partial upload.
@@ -61,5 +63,5 @@ The host service contributes no request prefix itself; the consuming tool owns s
 ## Known Limitations and Deferred Work
 
 - Generates one new raster image per request; reference-image transfer and progress frames are not implemented.
-- The local worker processes requests serially and does not clean retained images automatically.
+- The local worker does not clean retained images automatically; operators must choose a retention policy.
 - A stopped local script is detected only after the heartbeat freshness window.

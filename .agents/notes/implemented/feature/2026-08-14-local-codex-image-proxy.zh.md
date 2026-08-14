@@ -18,7 +18,7 @@ Tenant Web 还带来一个所有权约束。每个标识符都运行独立子进
 
 `@deepseek-ai/dsh-tool-codex-image-proxy` 是 Agent 侧消费端，由 standard、code 和 cordis preset 挂载。它的 `generate_image` 工具接收完整 prompt 和可选的有界 context 摘要。固定指引要求模型针对图片生成意图选择该工具，排除秘密和无关历史，复用返回的精确 Markdown，并如实报告本机 worker 离线。意图路由仍然是普通模型工具选择；没有关键词中间件抢占 Agent loop。
 
-本机 `scripts/codex-image-worker.mjs` 每十秒通过已鉴权的 `bohr sandbox` CLI 轮询，不暴露公共 claim 接口。claim 是从 pending 到 claimed 的原子重命名，并带可续租租约；过期 claim 会重新入队。忙碌期间，worker 同时续租和续心跳，执行 `codex exec --json --ephemeral --sandbox workspace-write`，让 `$imagegen` 只生成一张图片，校验图片签名和大小，上传到沙盒私有临时路径，再要求沙盒校验长度和 SHA-256，最后原子发布最终结果。取消标记会阻止迟到 worker 结果复活已终止调用。
+本机 `scripts/codex-image-worker.mjs` 每十秒通过已鉴权的 `bohr sandbox` CLI 轮询，不暴露公共 claim 接口。有界任务池默认并行运行两个独立生成任务，也接受显式的正整数 `--concurrency` 覆盖。claim 是从 pending 到 claimed 的原子重命名，并带可续租租约；过期 claim 会重新入队。忙碌期间，每个请求独立续租并刷新共享心跳，执行 `codex exec --json --ephemeral --sandbox workspace-write`，让 `$imagegen` 只生成一张图片，校验图片签名和大小，上传到沙盒私有临时路径，再要求沙盒校验长度和 SHA-256，最后原子发布最终结果。取消标记会阻止迟到 worker 结果复活已终止调用。
 
 没有新鲜心跳时，离线是规范的成功返回值，而不是抛出的基础设施异常。请求被接受后仍会继续观察心跳；worker 死亡会在完整生成超时前转成离线结果。真实 Codex 失败是携带有界诊断的规范 failed 值。工具仍会转发 `exec.signal`，其声明的工具调用超时比服务请求预算多五秒，让服务优先发布超时/取消状态。
 
@@ -44,6 +44,6 @@ Tenant Web 还带来一个所有权约束。每个标识符都运行独立子进
 
 ## 后果
 
-只有本机 worker 持续心跳时文生图才可用，每个请求在领取前最多等待一个轮询间隔。本机保留 Codex 凭据和生成费用；远端沙盒只保留 prompt、有界 context、状态记录和生成图片。多个标识符共享一个 worker 进程，但拥有不同队列和路由命名空间。
+只有本机 worker 持续心跳时文生图才可用；请求在领取前可能等待一个轮询间隔和本机任务池容量。本机保留 Codex 凭据和生成费用；远端沙盒只保留 prompt、有界 context、状态记录和生成图片。多个标识符共享一个有界 worker 任务池，但拥有不同队列和路由命名空间。
 
 已完成图片会持久保留，使旧 transcript 继续显示。自动保留期和清理由于产品尚未定义保留时长而暂缓；运维需要为队列根目录配置容量或主动清理。首版协议一次生成一张新光栅图片，尚不传输参考图片、不流式返回进度，也不并发执行请求。
