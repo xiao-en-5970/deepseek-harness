@@ -18,7 +18,7 @@ describe('local Codex image worker', () => {
     expect(() => parseWorkerArgs(['--sandbox', 's', '--poll-seconds', '0'])).toThrow('positive integer')
     expect(() => parseWorkerArgs(['--sandbox', 's', '--concurrency', '1.5'])).toThrow('positive integer')
     expect(parseWorkerArgs(['--sandbox', 's', '--once'])).toMatchObject({
-      sandbox: 's', once: true, pollSeconds: 10, leaseSeconds: 60, concurrency: 2,
+      sandbox: 's', once: true, pollSeconds: 10, leaseSeconds: 60, concurrency: 5,
     })
     expect(parseWorkerArgs(['--', '--sandbox', 's', '--once']).sandbox).toBe('s')
   })

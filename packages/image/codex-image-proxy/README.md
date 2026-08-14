@@ -36,7 +36,7 @@ pnpm run codex:image-worker -- \
 
 It polls every ten seconds by default. `--once` performs one heartbeat/claim pass for diagnostics. `CODEX_BIN` and `BOHR_BIN` may override executable paths without entering queue records.
 
-The worker runs at most two Codex generations in parallel by default. Set `--concurrency <n>` to another positive bound when local CPU, memory, and Codex rate limits permit it. Queue claims remain atomic and every active request renews its own lease.
+The worker runs at most five Codex generations in parallel by default. Set `--concurrency <n>` to another positive bound when local CPU, memory, and Codex rate limits permit it. Queue claims remain atomic and every active request renews its own lease.
 
 ## Queue contract
 

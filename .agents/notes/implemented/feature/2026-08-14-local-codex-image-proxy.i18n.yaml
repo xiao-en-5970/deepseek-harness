@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-14-local-codex-image-proxy.md
-2026-08-14-local-codex-image-proxy.md: cf1cf0b57b7afad3a23fdc6b1a24ddd2ecbdb0e1
-2026-08-14-local-codex-image-proxy.zh.md: a776e0e22bd4eca097b0be1e4f08e76830991e86
+2026-08-14-local-codex-image-proxy.md: e46040109a8260d392d41d0e975b95bfed4aba86
+2026-08-14-local-codex-image-proxy.zh.md: 0160ede878b4d33023e77f86d255e161376979dd

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 export const DEFAULT_POLL_SECONDS = 10
 export const DEFAULT_LEASE_SECONDS = 60
-export const DEFAULT_CONCURRENCY = 2
+export const DEFAULT_CONCURRENCY = 5
 export const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024
 export const DEFAULT_CODEX_BIN = '/Applications/ChatGPT.app/Contents/Resources/codex'
 
@@ -466,7 +466,7 @@ function usage() {
     '  --queue-root <absolute sandbox path>  Shared queue root',
     '  --poll-seconds <n>                    Poll interval (default 10)',
     '  --lease-seconds <n>                   Claim lease (default 60)',
-    '  --concurrency <n>                     Maximum parallel generations (default 2)',
+    '  --concurrency <n>                     Maximum parallel generations (default 5)',
     '  --codex-bin <path>                    Local Codex CLI path',
     '  --bohr-bin <path>                     Local bohr CLI path',
     '  --max-image-bytes <n>                 Returned image limit',

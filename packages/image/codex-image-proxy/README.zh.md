@@ -38,7 +38,7 @@ pnpm run codex:image-worker -- \
 
 默认每十秒轮询一次。`--once` 只进行一次心跳/领取，适合诊断。可以用 `CODEX_BIN` 和 `BOHR_BIN` 覆盖可执行文件路径，这些值不会进入队列记录。
 
-worker 默认最多并行运行两个 Codex 生成任务。如果本机 CPU、内存和 Codex 限流允许，可以用 `--concurrency <n>` 设置其他正整数上限。队列领取仍然是原子的，每个活跃请求也会独立续租。
+worker 默认最多并行运行五个 Codex 生成任务。如果本机 CPU、内存和 Codex 限流允许，可以用 `--concurrency <n>` 设置其他正整数上限。队列领取仍然是原子的，每个活跃请求也会独立续租。
 
 ## 队列协议
 
