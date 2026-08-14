@@ -8,9 +8,13 @@ import { CloseLabel, HeaderContent, TriggerContent } from '../src/client/chrome.
 import type { TriggerContentProps } from '../src/client/chrome.tsx'
 import { SettingsDocumentAction } from '../src/client/SettingsDocumentAction.tsx'
 import { SettingsDocumentStore } from '../src/client/settings-document-store.ts'
+import { TenantIdentityRow } from '../src/client/TenantIdentityRow.tsx'
 import { en } from '../src/client/locales.ts'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 // The seat's key domain is settings ∪ common; the stub answers from the
 // package dictionary and falls back to the key like the real chain.
@@ -55,6 +59,48 @@ describe('GeneralSection', () => {
     const { renderSlot } = mount()
     expect(renderSlot).toHaveBeenCalledWith('settings.general.item', {})
     expect(screen.getByTestId('slot-settings.general.item')).toBeTruthy()
+  })
+})
+
+describe('TenantIdentityRow', () => {
+  const tenantT: TriggerContentProps['t'] = (key, params) => {
+    const template = (en as Record<string, string>)[key] ?? key
+    const identifier = params?.identifier
+    return template.replaceAll('{identifier}', typeof identifier === 'string' ? identifier : '')
+  }
+
+  it('shows the named identifier with both switch paths', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      selected: true,
+      identifier: 'Tenant-Alpha',
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))))
+    render(<TenantIdentityRow {...kit} t={tenantT} />)
+
+    expect(await screen.findByText('Current: Tenant-Alpha')).toBeTruthy()
+    expect(screen.getByText(/Uses the default space API key/u)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Switch identifier' }).getAttribute('href'))
+      .toBe('/__dsh_tenant/reset')
+    expect(screen.getByRole('link', { name: 'Return to default' }).getAttribute('href'))
+      .toBe('/__dsh_tenant/default')
+  })
+
+  it('shows only the reselect action in the default space', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      selected: true,
+      identifier: null,
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))))
+    render(<TenantIdentityRow {...kit} t={tenantT} />)
+
+    expect(await screen.findByText('Current: Default space')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Switch identifier' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Return to default' })).toBeNull()
+  })
+
+  it('stays absent when the ordinary Web server owns the route', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('not found', { status: 404 }))))
+    const { container } = render(<TenantIdentityRow {...kit} t={tenantT} />)
+    await waitFor(() => { expect(fetch).toHaveBeenCalledOnce() })
+    expect(container.childElementCount).toBe(0)
   })
 })
 

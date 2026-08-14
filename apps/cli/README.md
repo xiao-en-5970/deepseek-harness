@@ -11,9 +11,14 @@ The `dsh` command is the product launcher for profiles: ordered stacks of plugin
 | `dsh --profile <name>` | Boot the named profile under `$DSH_HOME/profiles/<name>`. |
 | `dsh --profile headless "job"` | Run one fresh persisted session, print the final answer, and exit. |
 | `dsh web` | Alias of `--profile web`. |
+| `dsh tenant-web` | Serve a blocking browser-identifier selector and one isolated Web child per identifier. |
 | `dsh plugin --profile <name> <pnpm args>` | Manage a profile's plugins by forwarding to pnpm in the profile directory. |
 
-The invoking directory is the default workspace root. The `web` and `headless` profiles auto-initialize on first use from shipped templates; any other profile must be created through `dsh plugin`.
+The invoking directory is the default workspace root for ordinary profile boots and the blank `tenant-web` selection. A named tenant receives a private working directory and Harness home below the configured tenant root. The `web` and `headless` profiles auto-initialize on first use from shipped templates; any other profile must be created through `dsh plugin`.
+
+## Identifier-isolated Web
+
+`dsh tenant-web` serves an inline, blocking selector before the Harness application. A blank identifier routes to the ordinary default Web data; each normalized non-blank identifier starts a loopback-only `dsh web` child with separate `HOME`, `DSH_HOME`, workspace root, settings, and session persistence. The browser session cookie selects the child for HTTP, SSE, and WebSocket requests. Named tenants inherit provider API keys from the default space until Models stores a local override; values are read through a fallback layer, never copied. General settings shows the current identifier, a reselect action, and — for named tenants — a direct return to default. This mechanism isolates product data but does not authenticate identifiers, so the gateway binds loopback only and requires an authenticated outer reverse proxy for remote access. The [CLI behavior reference](reference/README.md#tenant-web-gateway) owns routes, flags, lifecycle, and limits.
 
 ## App arguments
 

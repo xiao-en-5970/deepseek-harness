@@ -560,6 +560,8 @@ export interface Config {
   path?: string
   /** Harness home used when `path` is omitted; defaults to `$DSH_HOME` or `~/.dsh`. */
   dshHome?: string
+  /** Optional read-only credentials document below the local store and above `.env` layers. */
+  fallbackPath?: string
   /** Watch the document and hot-publish external edits; defaults to true. */
   watch?: boolean
   /** Watcher write-settle window in milliseconds; defaults to 100. */
@@ -567,7 +569,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/credentials/credentials-local/src/index.ts:55`](../packages/credentials/credentials-local/src/index.ts)
+来源：[`packages/credentials/credentials-local/src/index.ts:56`](../packages/credentials/credentials-local/src/index.ts)
 
 <a id="deepseek-aidsh-e2b"></a>
 
@@ -757,6 +759,24 @@ export interface Config {
 
 来源：[`packages/host/apiproxy/src/index.ts:41`](../packages/host/apiproxy/src/index.ts)
 
+<a id="deepseek-aidsh-host-directory-picker-auto"></a>
+
+## `@deepseek-ai/dsh-host-directory-picker-auto`
+
+需要：`webServer` · `loader`
+
+```ts config-catalog
+/** Deployment policy forwarded only when the adaptive chooser resolves to `browse`. */
+export interface Config {
+  /** Fully qualified subtree exposed to the browser directory picker. */
+  browseRoot?: string
+  /** Fully qualified subtree accepting browser directory uploads. */
+  uploadRoot?: string
+}
+```
+
+来源：[`packages/host/directory-picker-auto/src/index.ts:33`](../packages/host/directory-picker-auto/src/index.ts)
+
 <a id="deepseek-aidsh-host-directory-picker-browse"></a>
 
 ## `@deepseek-ai/dsh-host-directory-picker-browse`
@@ -766,10 +786,24 @@ export interface Config {
 export interface Config {
   /** Complete-result bound of one listing level; see {@link BrowseDirectoryPicker.Config}. */
   maxEntries: number
+  /** Fully qualified subtree exposed by listing and directory creation; omitted permits the Host filesystem. */
+  browseRoot?: string
+  /** Fully qualified subtree accepting uploads; blank follows `browseRoot`, then the Host account's home directory. */
+  uploadRoot?: string
+  /** Maximum decoded bytes in one upload RPC chunk; defaults to 512 KiB so base64 JSON fits common 1 MiB proxy limits. */
+  maxUploadChunkBytes?: number
+  /** Maximum decoded bytes in one uploaded file. */
+  maxUploadFileBytes?: number
+  /** Maximum decoded bytes across one directory upload. */
+  maxUploadBytes?: number
+  /** Maximum file count across one directory upload. */
+  maxUploadFiles?: number
+  /** Idle lifetime before an incomplete upload root is removed. */
+  uploadLifetimeMs?: number
 }
 ```
 
-来源：[`packages/host/directory-picker-browse/src/index.ts:181`](../packages/host/directory-picker-browse/src/index.ts)
+来源：[`packages/host/directory-picker-browse/src/index.ts:180`](../packages/host/directory-picker-browse/src/index.ts)
 
 <a id="deepseek-aidsh-host-frontend-static"></a>
 
@@ -3070,7 +3104,6 @@ export interface Config {
 - `@deepseek-ai/dsh-fs-e2b` — 需要 `e2b`（[`packages/e2b/fs-e2b/src/index.ts`](../packages/e2b/fs-e2b/src/index.ts)）
 - `@deepseek-ai/dsh-fs-observation-policy`（[`packages/fs/fs-observation-policy/src/index.ts`](../packages/fs/fs-observation-policy/src/index.ts)）
 - `@deepseek-ai/dsh-goal-round-driver` — 需要 `agents` · `goals` · `sessions`（[`packages/goal/goal-round-driver/src/index.ts`](../packages/goal/goal-round-driver/src/index.ts)）
-- `@deepseek-ai/dsh-host-directory-picker-auto` — 需要 `webServer` · `loader`（[`packages/host/directory-picker-auto/src/index.ts`](../packages/host/directory-picker-auto/src/index.ts)）
 - `@deepseek-ai/dsh-host-directory-picker-native`（[`packages/host/directory-picker-native/src/index.ts`](../packages/host/directory-picker-native/src/index.ts)）
 - `@deepseek-ai/dsh-host-plugin-inventory` — 需要 `loader`（[`packages/host/plugin-inventory/src/index.ts`](../packages/host/plugin-inventory/src/index.ts)）
 - `@deepseek-ai/dsh-llm`（[`packages/llm/llm/src/index.ts`](../packages/llm/llm/src/index.ts)）

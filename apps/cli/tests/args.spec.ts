@@ -57,6 +57,32 @@ describe('parseDshArgs', () => {
       .toEqual({ mode: 'plugin', profile: 'tui', args: ['add', '--save-dev', 'x'] })
   })
 
+  it('routes the tenant Web gateway with bounded child-process settings', () => {
+    expect(parse(['tenant-web'])).toEqual({
+      mode: 'tenant-web',
+      host: '127.0.0.1',
+      port: 3080,
+      maxActiveTenants: 8,
+      idleTimeoutMs: 1_800_000,
+      startTimeoutMs: 120_000,
+      patches: [],
+    })
+    expect(parse([
+      'tenant-web', '--port', '0', '--tenant-root', '/tmp/tenants',
+      '--max-active-tenants', '3', '--idle-timeout-ms', '50', '--start-timeout-ms', '70',
+      '--patch', 'base.yml', '--patch', 'site.yml',
+    ])).toEqual({
+      mode: 'tenant-web',
+      host: '127.0.0.1',
+      port: 0,
+      tenantRoot: '/tmp/tenants',
+      maxActiveTenants: 3,
+      idleTimeoutMs: 50,
+      startTimeoutMs: 70,
+      patches: ['base.yml', 'site.yml'],
+    })
+  })
+
   it('routes profile and web config dumps', () => {
     expect(parse(['--profile', 'web', '--dump-config']))
       .toEqual({ mode: 'dump-config', profile: 'web', defaultOnly: false, patches: [] })
@@ -96,6 +122,12 @@ describe('parseDshArgs', () => {
     expect(exitCode(['plugin', '--profile', 'tui'])).toBe(1) // nothing to forward
     expect(exitCode(['plugin', '--profile', ''])).toBe(1)
     expect(exitCode(['--profile', 'x', 'plugin', 'add', 'y'])).toBe(1)
+    expect(exitCode(['tenant-web', '--host', '0.0.0.0'])).toBe(1)
+    expect(exitCode(['tenant-web', '--port', '-1'])).toBe(1)
+    expect(exitCode(['tenant-web', '--port', '65536'])).toBe(1)
+    expect(exitCode(['tenant-web', '--max-active-tenants', '0'])).toBe(1)
+    expect(exitCode(['tenant-web', '--idle-timeout-ms', 'x'])).toBe(1)
+    expect(exitCode(['tenant-web', '--start-timeout-ms', '0'])).toBe(1)
   })
 
   it('keeps its own help for an invocation with no app to hand it to', () => {

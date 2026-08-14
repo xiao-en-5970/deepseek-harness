@@ -50,12 +50,33 @@ function updates(ctx: Context): CredentialRef[] {
 describe('resolveSpec', () => {
   it('defaults to .credentials.yaml under the harness home with watching on', () => {
     const spec = resolveSpec({ dshHome: '/custom/home' })
-    expect(spec).toEqual({ filename: resolve('/custom/home/.credentials.yaml'), watch: true, debounceMs: 100 })
+    expect(spec).toEqual({
+      filename: resolve('/custom/home/.credentials.yaml'),
+      fallbackFilename: undefined,
+      watch: true,
+      debounceMs: 100,
+    })
   })
 
   it('lets an explicit path win over the home', () => {
-    const spec = resolveSpec({ path: '/etc/dsh/creds.yaml', dshHome: '/ignored', watch: false, debounceMs: 5 })
-    expect(spec).toEqual({ filename: resolve('/etc/dsh/creds.yaml'), watch: false, debounceMs: 5 })
+    const spec = resolveSpec({
+      path: '/etc/dsh/creds.yaml',
+      fallbackPath: '/etc/dsh/default-creds.yaml',
+      dshHome: '/ignored',
+      watch: false,
+      debounceMs: 5,
+    })
+    expect(spec).toEqual({
+      filename: resolve('/etc/dsh/creds.yaml'),
+      fallbackFilename: resolve('/etc/dsh/default-creds.yaml'),
+      watch: false,
+      debounceMs: 5,
+    })
+  })
+
+  it('rejects a fallback that aliases the writable document', () => {
+    expect(() => resolveSpec({ path: '/etc/dsh/creds.yaml', fallbackPath: '/etc/dsh/./creds.yaml' }))
+      .toThrow(/fallbackPath must differ/)
   })
 })
 
@@ -135,6 +156,49 @@ describe('layer ladder', () => {
     expect(await ctx.credentials.describe(KEY)).toEqual({ configured: true, source: 'file', writable: true })
     await expect(ctx.credentials.set(KEY, 'rotated')).resolves.toBeUndefined()
     expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'rotated', source: 'file' })
+  })
+
+  it('inherits a shared fallback, lets a local write override it, and returns to it on unset', async () => {
+    const dir = await tempDir()
+    const path = join(dir, 'tenant', '.credentials.yaml')
+    const fallbackPath = join(dir, 'default', '.credentials.yaml')
+    await mkdir(join(dir, 'default'), { recursive: true })
+    await writeCredentials(fallbackPath, 'DSH_CRED_TEST: from-default\nDSH_CRED_OTHER: shared-other\n')
+    const ctx = await boot({ path, fallbackPath, watch: false })
+
+    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'from-default', source: 'fallback-file' })
+    expect(await ctx.credentials.describe(KEY)).toEqual({
+      configured: true,
+      source: 'fallback-file',
+      writable: true,
+    })
+
+    await ctx.credentials.set(KEY, 'tenant-specific')
+    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'tenant-specific', source: 'file' })
+    expect(await readFile(fallbackPath, 'utf8')).toContain('DSH_CRED_TEST: from-default')
+
+    await ctx.credentials.unset(KEY)
+    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'from-default', source: 'fallback-file' })
+    expect(await ctx.credentials.resolve(OTHER)).toEqual({ value: 'shared-other', source: 'fallback-file' })
+  })
+
+  it('ranks inherited environment and local storage above the shared fallback, which beats .env', async () => {
+    const dir = await tempDir()
+    const path = join(dir, 'tenant.yaml')
+    const fallbackPath = join(dir, 'default.yaml')
+    await writeCredentials(fallbackPath, 'DSH_CRED_TEST: from-default\n')
+    const ctx = new Context()
+    ctx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, createLaunchEnvironmentSnapshot([
+      { source: 'process', values: {} },
+      { source: 'project-env', path: '/work/.env', values: { DSH_CRED_TEST: 'from-project' } },
+    ]))
+    const fiber = ctx.plugin(LocalCredentialProvider, { path, fallbackPath, watch: false })
+    cleanups.push(async () => { await fiber.dispose() })
+    await fiber
+
+    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'from-default', source: 'fallback-file' })
+    await ctx.credentials.set(KEY, 'from-tenant')
+    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'from-tenant', source: 'file' })
   })
 
   it('serves the user .env only when nothing is stored', async () => {

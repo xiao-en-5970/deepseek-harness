@@ -112,6 +112,33 @@ describe('watcher pipeline', () => {
     })
   })
 
+  it('hot-publishes effective fallback edits without disturbing a local override', async () => {
+    const dir = await tempDir()
+    const path = join(dir, 'tenant.yaml')
+    const fallbackPath = join(dir, 'default.yaml')
+    await writeCredentials(fallbackPath, 'DSH_CRED_PIPE: inherited-one\n')
+    const ctx = await boot({ path, fallbackPath, debounceMs: 5 })
+    const fallbackWatcher = (await fakeInstances()).find(instance => instance.path.endsWith('/default.yaml'))
+    expect(fallbackWatcher).toBeDefined()
+    const seen: string[] = []
+    ctx.on('credentials/updated', (ref) => { seen.push(ref) })
+
+    await writeCredentials(fallbackPath, 'DSH_CRED_PIPE: inherited-two\n')
+    fallbackWatcher!.watcher.emit('all', 'change', fallbackPath)
+    await vi.waitFor(async () => {
+      expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'inherited-two', source: 'fallback-file' })
+    })
+    expect(seen).toEqual([KEY])
+
+    await ctx.credentials.set(KEY, 'tenant-specific')
+    seen.length = 0
+    await writeCredentials(fallbackPath, 'DSH_CRED_PIPE: inherited-three\n')
+    fallbackWatcher!.watcher.emit('all', 'change', fallbackPath)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'tenant-specific', source: 'file' })
+    expect(seen).toEqual([])
+  })
+
   it('keeps the last good snapshot when the file turns unreadable at runtime', async () => {
     const dir = await tempDir()
     const path = join(dir, '.credentials.yaml')

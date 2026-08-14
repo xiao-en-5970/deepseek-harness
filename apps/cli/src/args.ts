@@ -44,8 +44,21 @@ interface PluginInvocation {
   args: string[]
 }
 
+/** Run the process-isolated browser-identifier gateway. */
+interface TenantWebInvocation {
+  mode: 'tenant-web'
+  host: '127.0.0.1'
+  port: number
+  tenantRoot?: string
+  maxActiveTenants: number
+  idleTimeoutMs: number
+  startTimeoutMs: number
+  /** Extra profile overlays forwarded to every tenant child. */
+  patches: string[]
+}
+
 /** The resolved `dsh` invocation. Help, version, and errors exit inside {@link parseDshArgs}. */
-export type DshInvocation = ProfileInvocation | DumpConfigInvocation | PluginInvocation
+export type DshInvocation = ProfileInvocation | DumpConfigInvocation | PluginInvocation | TenantWebInvocation
 
 /** Launcher flags shared by the default command and the `web` alias. */
 interface BootOptions {
@@ -68,8 +81,17 @@ Examples:
   dsh --profile tui --patch ./extra.yml      boot a custom profile with one extra overlay
   dsh --profile tui --resume <session>       arguments after the launcher flags reach the app
   dsh --profile web --help                   the web app's own flags and help
+  dsh tenant-web                             require a browser identifier and isolate each identifier's Web data
   dsh plugin --profile tui add <package>     install a plugin into the tui profile
 `
+
+/** Parse one decimal integer option with an inclusive lower bound. */
+function integerOption(program: Command, name: string, value: string, minimum: number, maximum = Number.MAX_SAFE_INTEGER): number {
+  if (!/^\d+$/u.test(value) || Number(value) < minimum || Number(value) > maximum || !Number.isSafeInteger(Number(value))) {
+    program.error(`error: ${name} must be an integer from ${String(minimum)} to ${String(maximum)}, got ${JSON.stringify(value)}`)
+  }
+  return Number(value)
+}
 
 /**
  * Resolve a boot or dump invocation from the launcher flags and the leftover
@@ -178,6 +200,40 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
       if (options.profile === '') program.error('error: --profile needs a name')
       if (args.length === 0) program.error('error: plugin needs pnpm arguments to forward (e.g. add <package>)')
       resolved = { mode: 'plugin', profile: options.profile, args }
+    })
+
+  const tenantWeb = program.command('tenant-web').description('serve the Web UI through a blocking identifier selector and one isolated child per identifier')
+  tenantWeb
+    .option('--host <host>', 'bind host (loopback only)', '127.0.0.1')
+    .option('--port <port>', 'listen port; pass 0 to let the OS choose', '3080')
+    .option('--tenant-root <path>', 'named-tenant data root (default: $DSH_HOME/tenant-web)')
+    .option('--max-active-tenants <count>', 'maximum simultaneously running tenant children', '8')
+    .option('--idle-timeout-ms <ms>', 'stop an idle tenant child after this duration', '1800000')
+    .option('--start-timeout-ms <ms>', 'maximum tenant child startup time', '120000')
+    .option('--patch <path>', 'extra Web-profile overlay forwarded to every tenant child (repeatable)', collect)
+    .action((options: {
+      host: string
+      port: string
+      tenantRoot?: string
+      maxActiveTenants: string
+      idleTimeoutMs: string
+      startTimeoutMs: string
+      patch?: string[]
+    }) => {
+      rejectParentOptions('tenant-web')
+      if (options.host !== '127.0.0.1') {
+        tenantWeb.error('error: tenant-web binds loopback only; put authentication and TLS on an outer reverse proxy')
+      }
+      resolved = {
+        mode: 'tenant-web',
+        host: '127.0.0.1',
+        port: integerOption(tenantWeb, '--port', options.port, 0, 65_535),
+        ...options.tenantRoot !== undefined && { tenantRoot: options.tenantRoot },
+        maxActiveTenants: integerOption(tenantWeb, '--max-active-tenants', options.maxActiveTenants, 1),
+        idleTimeoutMs: integerOption(tenantWeb, '--idle-timeout-ms', options.idleTimeoutMs, 1),
+        startTimeoutMs: integerOption(tenantWeb, '--start-timeout-ms', options.startTimeoutMs, 1),
+        patches: options.patch ?? [],
+      }
     })
 
   try {
