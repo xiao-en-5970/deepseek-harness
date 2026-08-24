@@ -6,7 +6,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -23,7 +23,7 @@ declare module '@deepseek-ai/cordis' {
 /** Stable route prefix used to display completed images through the selected tenant child. */
 export const IMAGE_ROUTE = '/api/codex-image-proxy/image'
 /** Queue protocol version shared with the local worker. */
-export const QUEUE_PROTOCOL_VERSION = 1
+export const QUEUE_PROTOCOL_VERSION = 2
 /** Default worker heartbeat freshness window. */
 export const DEFAULT_WORKER_FRESHNESS_MS = 35_000
 /** Default interval between result probes. */
@@ -32,6 +32,12 @@ export const DEFAULT_RESULT_POLL_INTERVAL_MS = 500
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000
 /** Default maximum returned image bytes. */
 export const DEFAULT_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+/** Maximum reference images accepted by one edit request. */
+export const MAX_REFERENCE_IMAGES = 5
+/** Maximum encoded bytes accepted for one reference image. */
+export const MAX_REFERENCE_IMAGE_BYTES = 5 * 1024 * 1024
+/** Maximum aggregate encoded bytes accepted for all reference images. */
+export const MAX_REFERENCE_IMAGE_TOTAL_BYTES = 25 * 1024 * 1024
 
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const TENANT_KEY = /^(?:default|[0-9a-f]{64})$/u
@@ -89,8 +95,18 @@ export interface ImageProxyRequest {
   tenantKey: string
   prompt: string
   context: string
+  referenceImages: QueuedReferenceImage[]
   createdAt: number
   expiresAt: number
+}
+
+/** Immutable reference-image metadata published beside one queue request. */
+export interface QueuedReferenceImage {
+  index: number
+  mimeType: ImageMimeType
+  bytes: number
+  sha256: string
+  name?: string
 }
 
 interface WorkerHeartbeat {
@@ -119,6 +135,7 @@ interface FailedResult {
 
 type QueueResult = CompletedResult | FailedResult
 
+/** Result returned to the model-facing image tool. */
 export type ImageProxyResult =
   | {
     status: 'generated'
@@ -131,9 +148,18 @@ export type ImageProxyResult =
   }
   | { status: 'offline' | 'failed'; requestId: string; message: string }
 
+/** One image generation request accepted by the host queue. */
 export interface ImageGenerationRequest {
   prompt: string
   context: string
+  referenceImages?: readonly ReferenceImageInput[]
+}
+
+/** Already-authorized reference bytes supplied by the model-facing tool. */
+export interface ReferenceImageInput {
+  data: Uint8Array
+  mimeType: ImageMimeType
+  name?: string
 }
 
 interface QueueLayout {
@@ -142,6 +168,7 @@ interface QueueLayout {
   pending: string
   results: string
   images: string
+  references: string
   cancelled: string
   heartbeat: string
 }
@@ -165,7 +192,11 @@ function normalizePublicBaseUrl(value: string): string {
   return url.toString().replace(/\/$/u, '')
 }
 
-/** Resolve and validate configuration at the plugin boundary. */
+/**
+ * Resolve and validate configuration at the plugin boundary.
+ * @param config - deployment configuration to resolve.
+ * @returns validated configuration with defaults materialized.
+ */
 export function resolveConfig(config: Config = {}): ResolvedConfig {
   const tenantKey = config.tenantKey ?? 'default'
   if (!TENANT_KEY.test(tenantKey)) {
@@ -190,6 +221,7 @@ function queueLayout(config: ResolvedConfig): QueueLayout {
     pending: join(tenantRoot, 'pending'),
     results: join(tenantRoot, 'results'),
     images: join(tenantRoot, 'images'),
+    references: join(tenantRoot, 'references'),
     cancelled: join(tenantRoot, 'cancelled'),
     heartbeat: join(config.queueRoot, 'heartbeat.json'),
   }
@@ -200,8 +232,59 @@ async function ensureQueue(layout: QueueLayout): Promise<void> {
     mkdir(layout.pending, { recursive: true, mode: 0o700 }),
     mkdir(layout.results, { recursive: true, mode: 0o700 }),
     mkdir(layout.images, { recursive: true, mode: 0o700 }),
+    mkdir(layout.references, { recursive: true, mode: 0o700 }),
     mkdir(layout.cancelled, { recursive: true, mode: 0o700 }),
   ])
+}
+
+function safeReferenceName(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const leaf = value.slice(Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\')) + 1)
+  const clean = leaf.replace(/[\u0000-\u001f\u007f]/gu, '').trim().slice(0, 255)
+  return clean === '' ? undefined : clean
+}
+
+function referenceFileName(reference: Pick<QueuedReferenceImage, 'index' | 'mimeType'>): string {
+  return `${String(reference.index).padStart(2, '0')}.${MIME_TO_EXTENSION[reference.mimeType]}`
+}
+
+async function stageReferenceImages(
+  layout: QueueLayout,
+  requestId: string,
+  images: readonly ReferenceImageInput[],
+): Promise<QueuedReferenceImage[]> {
+  if (images.length > MAX_REFERENCE_IMAGES) {
+    throw new Error(`at most ${String(MAX_REFERENCE_IMAGES)} reference images are allowed`)
+  }
+  let totalBytes = 0
+  const references: QueuedReferenceImage[] = []
+  const directory = join(layout.references, requestId)
+  if (images.length > 0) await mkdir(directory, { recursive: false, mode: 0o700 })
+  for (const [index, image] of images.entries()) {
+    if (!(image.mimeType in MIME_TO_EXTENSION)) throw new Error('unsupported reference-image media type')
+    if (image.data.byteLength < 1 || image.data.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
+      throw new Error(`reference image ${String(index + 1)} exceeds the ${String(MAX_REFERENCE_IMAGE_BYTES)} byte limit`)
+    }
+    totalBytes += image.data.byteLength
+    if (totalBytes > MAX_REFERENCE_IMAGE_TOTAL_BYTES) {
+      throw new Error(`reference images exceed the ${String(MAX_REFERENCE_IMAGE_TOTAL_BYTES)} byte aggregate limit`)
+    }
+    const name = safeReferenceName(image.name)
+    const reference: QueuedReferenceImage = {
+      index,
+      mimeType: image.mimeType,
+      bytes: image.data.byteLength,
+      sha256: createHash('sha256').update(image.data).digest('hex'),
+      ...name === undefined ? {} : { name },
+    }
+    await writeFile(join(directory, referenceFileName(reference)), image.data, { flag: 'wx', mode: 0o600 })
+    references.push(reference)
+  }
+  return references
+}
+
+async function cleanupReferenceImages(layout: QueueLayout, requestId: string): Promise<void> {
+  await rm(join(layout.references, requestId), { recursive: true, force: true })
 }
 
 async function atomicWriteJson(path: string, value: unknown): Promise<void> {
@@ -240,7 +323,13 @@ function heartbeatFrom(value: unknown): WorkerHeartbeat | undefined {
   return { version: input.version, workerId: input.workerId, updatedAt: input.updatedAt }
 }
 
-/** Return whether the durable heartbeat belongs to a recently live worker. */
+/**
+ * Return whether the durable heartbeat belongs to a recently live worker.
+ * @param value - parsed heartbeat candidate.
+ * @param now - current Unix time in milliseconds.
+ * @param freshnessMs - maximum accepted heartbeat age.
+ * @returns whether the candidate is a valid fresh heartbeat.
+ */
 export function workerIsFresh(value: unknown, now: number, freshnessMs: number): boolean {
   const heartbeat = heartbeatFrom(value)
   return heartbeat !== undefined && heartbeat.updatedAt <= now + 5_000 && now - heartbeat.updatedAt <= freshnessMs
@@ -305,6 +394,7 @@ async function cancelRequest(layout: QueueLayout, requestId: string, reason: str
     reason,
     cancelledAt: Date.now(),
   })
+  await cleanupReferenceImages(layout, requestId)
 }
 
 async function verifyCompletedImage(
@@ -428,6 +518,7 @@ export class CodexImageProxy extends Service {
   static inject = ['webServer']
   static Config = Config
 
+  /** Maximum time one generation request may wait for a worker result. */
   readonly requestTimeoutMs: number
   private readonly config: ResolvedConfig
   private readonly layout: QueueLayout
@@ -457,33 +548,32 @@ export class CodexImageProxy extends Service {
    */
   async generate(input: ImageGenerationRequest, signal: AbortSignal): Promise<ImageProxyResult> {
     const requestId = randomUUID()
-    if (this.config.publicBaseUrl === '') {
-      return {
-        status: 'failed',
-        requestId,
-        message: 'Image proxy publicBaseUrl is not configured, so the browser cannot display generated images.',
-      }
-    }
     await ensureQueue(this.layout)
     if (!workerIsFresh(await readJson(this.layout.heartbeat), Date.now(), this.config.workerFreshnessMs)) {
       return { status: 'offline', requestId, message: 'Local Codex is offline; image generation is unavailable.' }
     }
     const now = Date.now()
-    const request: ImageProxyRequest = {
-      version: QUEUE_PROTOCOL_VERSION,
-      requestId,
-      tenantKey: this.config.tenantKey,
-      prompt: input.prompt,
-      context: input.context,
-      createdAt: now,
-      expiresAt: now + this.config.requestTimeoutMs,
-    }
-    await atomicWriteJson(join(this.layout.pending, `${requestId}.json`), request)
+    let enqueued = false
     try {
+      const referenceImages = await stageReferenceImages(this.layout, requestId, input.referenceImages ?? [])
+      const request: ImageProxyRequest = {
+        version: QUEUE_PROTOCOL_VERSION,
+        requestId,
+        tenantKey: this.config.tenantKey,
+        prompt: input.prompt,
+        context: input.context,
+        referenceImages,
+        createdAt: now,
+        expiresAt: now + this.config.requestTimeoutMs,
+      }
+      await atomicWriteJson(join(this.layout.pending, `${requestId}.json`), request)
+      enqueued = true
       return await waitForResult(this.layout, requestId, this.config, signal)
     } catch (error) {
-      await cancelRequest(this.layout, requestId, 'caller-aborted').catch(() => undefined)
+      if (enqueued) await cancelRequest(this.layout, requestId, 'caller-aborted').catch(() => undefined)
       throw error
+    } finally {
+      await cleanupReferenceImages(this.layout, requestId).catch(() => undefined)
     }
   }
 }

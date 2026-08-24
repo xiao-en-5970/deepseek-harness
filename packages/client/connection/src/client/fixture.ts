@@ -2562,6 +2562,12 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         directoryTree.set(target, [])
         return ok(request, { path: target })
       },
+      listWorkspaceFiles: request => ok(request, {
+        path: request.payload.path,
+        entries: [],
+        truncated: false,
+      }),
+      createFile: request => ok(request, { path: `${request.payload.path}/${request.payload.name}` }),
       beginDirectoryUpload: request => ok(request, {
         uploadId: `00000000-0000-4000-8000-${String(nextDirectoryUpload++).padStart(12, '0')}`,
         path: `${request.payload.parentPath}/${request.payload.name}`,
@@ -2572,6 +2578,16 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       }),
       completeDirectoryUpload: request => ok(request, { path: `${FIXTURE_HOME}/uploaded-project` }),
       abortDirectoryUpload: request => ok(request, { aborted: true as const }),
+      beginFileUpload: request => ok(request, {
+        uploadId: `00000000-0000-4000-8000-${String(nextDirectoryUpload++).padStart(12, '0')}`,
+        path: `${request.payload.parentPath}/${request.payload.name}`,
+        maxChunkBytes: 1024 * 1024,
+      }),
+      writeFileUpload: request => ok(request, {
+        offset: request.payload.offset + (request.payload.data === '' ? 0 : atob(request.payload.data).length),
+      }),
+      completeFileUpload: request => ok(request, { path: `${FIXTURE_HOME}/${request.payload.uploadId}` }),
+      abortFileUpload: request => ok(request, { aborted: true as const }),
       openPath: request => ok(request, { opened: true as const }),
     },
     workspace: {
@@ -2966,6 +2982,13 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         ],
       }),
       models: request => ok(request, { groups: fixtureModelGroups(), failures: [] }),
+      balance: request => ok(request, {
+        balance: {
+          provider: request.payload.provider,
+          available: true,
+          balances: [{ currency: 'CNY', totalBalance: '88.88', grantedBalance: '8.88', toppedUpBalance: '80.00' }],
+        },
+      }),
       // The fixture endpoint is imaginary, so the interrogation answers the
       // catalog it already serves — enough for a surface to exercise adopting
       // candidates without a reachable provider.
@@ -3108,10 +3131,16 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'host.pickDirectory': return this.api.host.pickDirectory(request, new AbortController().signal)
       case 'host.listDirectory': return this.api.host.listDirectory(request, new AbortController().signal)
       case 'host.createDirectory': return this.api.host.createDirectory(request)
+      case 'host.listWorkspaceFiles': return this.api.host.listWorkspaceFiles(request, signal)
+      case 'host.createFile': return this.api.host.createFile(request)
       case 'host.beginDirectoryUpload': return this.api.host.beginDirectoryUpload(request)
       case 'host.writeDirectoryUpload': return this.api.host.writeDirectoryUpload(request)
       case 'host.completeDirectoryUpload': return this.api.host.completeDirectoryUpload(request)
       case 'host.abortDirectoryUpload': return this.api.host.abortDirectoryUpload(request)
+      case 'host.beginFileUpload': return this.api.host.beginFileUpload(request)
+      case 'host.writeFileUpload': return this.api.host.writeFileUpload(request)
+      case 'host.completeFileUpload': return this.api.host.completeFileUpload(request)
+      case 'host.abortFileUpload': return this.api.host.abortFileUpload(request)
       case 'host.openPath': return this.api.host.openPath(request, new AbortController().signal)
       case 'workspace.list': return this.api.workspace.list(request)
       case 'workspace.create': return this.api.workspace.create(request)
@@ -3143,6 +3172,7 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'credentials.unset': return this.api.credentials.unset(request)
       case 'llm.providers': return this.api.llm.providers(request)
       case 'llm.models': return this.api.llm.models(request)
+      case 'llm.balance': return this.api.llm.balance(request, signal)
       case 'llm.discoverModels': return this.api.llm.discoverModels(request, signal)
     }
   }

@@ -6,7 +6,7 @@
 import { z } from 'zod'
 import type { RequestPayload, ResponseValue } from './rpc-map.ts'
 import type { Wire } from './rpc.schema.ts'
-import type { ConfigurableProviderView, DiscoveredModelView } from './llm.ts'
+import type { ConfigurableProviderView, DiscoveredModelView, LlmAccountBalanceView } from './llm.ts'
 import { modelCatalogFailureSchema, modelProviderGroupSchema } from './sessions.schema.ts'
 
 /** ConfigurableProviderView row of llm.providers. */
@@ -35,6 +35,28 @@ export const llmModelsValueSchema = z.object({
   groups: z.array(modelProviderGroupSchema),
   failures: z.array(modelCatalogFailureSchema),
 }) satisfies z.ZodType<Wire<ResponseValue<'llm.models'>>>
+
+/** llm.balance request payload. */
+export const llmBalanceRequestSchema = z.object({
+  provider: z.string().min(1),
+}) satisfies z.ZodType<Wire<RequestPayload<'llm.balance'>>>
+
+/** Browser-safe provider account balance. */
+export const llmAccountBalanceViewSchema = z.object({
+  provider: z.string().min(1),
+  available: z.boolean(),
+  balances: z.array(z.object({
+    currency: z.string().min(1),
+    totalBalance: z.string(),
+    grantedBalance: z.string(),
+    toppedUpBalance: z.string(),
+  })),
+}) satisfies z.ZodType<Wire<LlmAccountBalanceView>>
+
+/** llm.balance response value. */
+export const llmBalanceValueSchema = z.object({
+  balance: llmAccountBalanceViewSchema.optional(),
+}) satisfies z.ZodType<Wire<ResponseValue<'llm.balance'>>>
 
 /** DiscoveredModelView row of llm.discoverModels. */
 export const discoveredModelViewSchema = z.object({

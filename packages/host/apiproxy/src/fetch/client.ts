@@ -14,10 +14,12 @@ import type { Wire } from '../api/rpc.schema.ts'
 import { rpcReceiptSchema, serverRequestSchema, serverResponseSchema } from '../api/rpc.schema.ts'
 import { hostFrameSchema, muxFrameSchema } from '../api/events.schema.ts'
 import {
-  hostAbortDirectoryUploadValueSchema, hostBeginDirectoryUploadValueSchema,
-  hostCompleteDirectoryUploadValueSchema, hostCreateDirectoryValueSchema, hostDescribeValueSchema,
-  hostListDirectoryValueSchema, hostOpenPathValueSchema, hostPickDirectoryValueSchema,
-  hostWriteDirectoryUploadValueSchema,
+  hostAbortDirectoryUploadValueSchema, hostAbortFileUploadValueSchema,
+  hostBeginDirectoryUploadValueSchema, hostBeginFileUploadValueSchema,
+  hostCompleteDirectoryUploadValueSchema, hostCompleteFileUploadValueSchema,
+  hostCreateDirectoryValueSchema, hostCreateFileValueSchema, hostDescribeValueSchema,
+  hostListDirectoryValueSchema, hostListWorkspaceFilesValueSchema, hostOpenPathValueSchema,
+  hostPickDirectoryValueSchema, hostWriteDirectoryUploadValueSchema, hostWriteFileUploadValueSchema,
 } from '../api/host.schema.ts'
 import {
   sessionCancelValueSchema,
@@ -62,7 +64,7 @@ import {
 import {
   credentialsDescribeValueSchema, credentialsSetValueSchema, credentialsUnsetValueSchema,
 } from '../api/credentials.schema.ts'
-import { llmDiscoverModelsValueSchema, llmModelsValueSchema, llmProvidersValueSchema } from '../api/llm.schema.ts'
+import { llmBalanceValueSchema, llmDiscoverModelsValueSchema, llmModelsValueSchema, llmProvidersValueSchema } from '../api/llm.schema.ts'
 import {
   subagentHistoryValueSchema,
   subagentInterruptValueSchema,
@@ -112,10 +114,16 @@ export interface IApiClient {
     pickDirectory(payload: RequestPayload<'host.pickDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.pickDirectory'>>>
     listDirectory(payload: RequestPayload<'host.listDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.listDirectory'>>>
     createDirectory(payload: RequestPayload<'host.createDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.createDirectory'>>>
+    listWorkspaceFiles(payload: RequestPayload<'host.listWorkspaceFiles'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.listWorkspaceFiles'>>>
+    createFile(payload: RequestPayload<'host.createFile'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.createFile'>>>
     beginDirectoryUpload(payload: RequestPayload<'host.beginDirectoryUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.beginDirectoryUpload'>>>
     writeDirectoryUpload(payload: RequestPayload<'host.writeDirectoryUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.writeDirectoryUpload'>>>
     completeDirectoryUpload(payload: RequestPayload<'host.completeDirectoryUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.completeDirectoryUpload'>>>
     abortDirectoryUpload(payload: RequestPayload<'host.abortDirectoryUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.abortDirectoryUpload'>>>
+    beginFileUpload(payload: RequestPayload<'host.beginFileUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.beginFileUpload'>>>
+    writeFileUpload(payload: RequestPayload<'host.writeFileUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.writeFileUpload'>>>
+    completeFileUpload(payload: RequestPayload<'host.completeFileUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.completeFileUpload'>>>
+    abortFileUpload(payload: RequestPayload<'host.abortFileUpload'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.abortFileUpload'>>>
     openPath(payload: RequestPayload<'host.openPath'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.openPath'>>>
   }
   workspace: {
@@ -165,6 +173,7 @@ export interface IApiClient {
   llm: {
     providers(payload: RequestPayload<'llm.providers'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providers'>>>
     models(payload: RequestPayload<'llm.models'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.models'>>>
+    balance(payload: RequestPayload<'llm.balance'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.balance'>>>
     discoverModels(payload: RequestPayload<'llm.discoverModels'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.discoverModels'>>>
   }
   /** client-response passthrough (rpcId is a backfill of the server-request's id — never minted here). */
@@ -196,10 +205,16 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'host.pickDirectory': hostPickDirectoryValueSchema,
   'host.listDirectory': hostListDirectoryValueSchema,
   'host.createDirectory': hostCreateDirectoryValueSchema,
+  'host.listWorkspaceFiles': hostListWorkspaceFilesValueSchema,
+  'host.createFile': hostCreateFileValueSchema,
   'host.beginDirectoryUpload': hostBeginDirectoryUploadValueSchema,
   'host.writeDirectoryUpload': hostWriteDirectoryUploadValueSchema,
   'host.completeDirectoryUpload': hostCompleteDirectoryUploadValueSchema,
   'host.abortDirectoryUpload': hostAbortDirectoryUploadValueSchema,
+  'host.beginFileUpload': hostBeginFileUploadValueSchema,
+  'host.writeFileUpload': hostWriteFileUploadValueSchema,
+  'host.completeFileUpload': hostCompleteFileUploadValueSchema,
+  'host.abortFileUpload': hostAbortFileUploadValueSchema,
   'host.openPath': hostOpenPathValueSchema,
   'workspace.list': workspaceListValueSchema,
   'workspace.create': workspaceCreateValueSchema,
@@ -231,6 +246,7 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'credentials.unset': credentialsUnsetValueSchema,
   'llm.providers': llmProvidersValueSchema,
   'llm.models': llmModelsValueSchema,
+  'llm.balance': llmBalanceValueSchema,
   'llm.discoverModels': llmDiscoverModelsValueSchema,
 }
 
@@ -450,10 +466,16 @@ export abstract class AbstractApiClient implements IApiClient {
     ),
     listDirectory: (payload, signal) => this.callUnary('host.listDirectory', payload, signal),
     createDirectory: (payload, signal) => this.callUnary('host.createDirectory', payload, signal),
+    listWorkspaceFiles: (payload, signal) => this.callUnary('host.listWorkspaceFiles', payload, signal),
+    createFile: (payload, signal) => this.callUnary('host.createFile', payload, signal),
     beginDirectoryUpload: (payload, signal) => this.callUnary('host.beginDirectoryUpload', payload, signal),
     writeDirectoryUpload: (payload, signal) => this.callUnary('host.writeDirectoryUpload', payload, signal),
     completeDirectoryUpload: (payload, signal) => this.callUnary('host.completeDirectoryUpload', payload, signal),
     abortDirectoryUpload: (payload, signal) => this.callUnary('host.abortDirectoryUpload', payload, signal),
+    beginFileUpload: (payload, signal) => this.callUnary('host.beginFileUpload', payload, signal),
+    writeFileUpload: (payload, signal) => this.callUnary('host.writeFileUpload', payload, signal),
+    completeFileUpload: (payload, signal) => this.callUnary('host.completeFileUpload', payload, signal),
+    abortFileUpload: (payload, signal) => this.callUnary('host.abortFileUpload', payload, signal),
     openPath: (payload, signal) => this.callUnary('host.openPath', payload, signal),
   }
 
@@ -511,6 +533,7 @@ export abstract class AbstractApiClient implements IApiClient {
   readonly llm: IApiClient['llm'] = {
     providers: (payload, signal) => this.callUnary('llm.providers', payload, signal),
     models: (payload, signal) => this.callUnary('llm.models', payload, signal),
+    balance: (payload, signal) => this.callUnary('llm.balance', payload, signal),
     discoverModels: (payload, signal) => this.callUnary('llm.discoverModels', payload, signal),
   }
 

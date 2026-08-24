@@ -146,6 +146,34 @@ describe('renderBlocks over hand-built trees', () => {
     expect(images.map(image => image.getAttribute('alt'))).toEqual(['', ''])
   })
 
+  it('allows a strict generated-image reference without allowing other root-relative references', () => {
+    const requestId = '123e4567-e89b-42d3-a456-426614174000'
+    const targets = createReferenceTargets()
+    targets.definitions.set('GENERATED', {
+      type: 'definition',
+      identifier: 'generated',
+      url: `/api/codex-image-proxy/image/${requestId}`,
+    })
+    targets.definitions.set('PRIVATE', {
+      type: 'definition',
+      identifier: 'private',
+      url: '/workspace/private.png',
+    })
+    const container = renderNodes([
+      {
+        type: 'paragraph',
+        children: [
+          { type: 'imageReference', identifier: 'generated', referenceType: 'full', alt: 'generated' },
+          { type: 'imageReference', identifier: 'private', referenceType: 'full', alt: 'private' },
+        ],
+      },
+    ], { ...makeContext(), targets })
+
+    expect(container.querySelector('img')?.getAttribute('src'))
+      .toBe(`/api/codex-image-proxy/image/${requestId}`)
+    expect(container.textContent).toContain('private')
+  })
+
   it('drops a definition nested in a list item without leaving a separator behind', () => {
     const container = renderNodes([
       {

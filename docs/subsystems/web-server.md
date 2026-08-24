@@ -70,7 +70,7 @@ Host service owning the shared queue and the browser image route.
 async generate(input: ImageGenerationRequest, signal: AbortSignal): Promise<ImageProxyResult>
 ```
 
-Source: [`packages/image/codex-image-proxy/src/index.ts:427`](../../packages/image/codex-image-proxy/src/index.ts)
+Source: [`packages/image/codex-image-proxy/src/index.ts:517`](../../packages/image/codex-image-proxy/src/index.ts)
 
 <a id="ctxwebserver--webserver"></a>
 

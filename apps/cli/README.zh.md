@@ -20,6 +20,8 @@
 
 `dsh tenant-web` 会在 Harness 应用之前提供一个内联的阻塞式选择器。标识符留空时路由到普通的默认 Web 数据；每个经过规范化的非空标识符都会启动一个仅监听 loopback 的 `dsh web` 子进程，并使用独立的 `HOME`、`DSH_HOME`、workspace 根目录、设置和会话持久化。浏览器会话 Cookie 为 HTTP、SSE 与 WebSocket 请求选择子进程。命名租户在「模型」页保存本地覆盖之前会继承默认空间的提供方 API Key；值通过后备层原地读取，不会被复制。「通用设置」会显示当前标识符、重新选择入口，并为命名租户提供直接切回默认空间的入口。该机制隔离产品数据，但不对标识符进行身份认证，因此网关只绑定 loopback，远程访问必须置于经过认证的外层反向代理之后。路由、flag、生命周期和限制以 [CLI 行为参考](reference/README.md#tenant-web-gateway)为准。
 
+随附 Web profile 还会加载皮肤中心组合包。打开「设置 → 皮肤中心」即可预览并应用随附的 11 套皮肤：Blue Fantasy、Dragon Heir、Harbor、Maid Atelier、Matrix、Miku、Minecraft、Trading、Whale Mom、Whale Song 和 XP。在 `tenant-web` 下，选择结果写入当前标识符自己的 profile，因此不同标识符可以使用不同皮肤。`--default-skin maid-atelier` 会在每个标识符首次启动时一次性应用源于 Deep Whale 的 Maid Atelier 皮肤；用户后续选择的皮肤会在网关重启后继续保留。
+
 ## 应用参数
 
 启动器只解析自身的 flag，并将其后的所有内容交给已启动的 profile；注入该 profile 的任意应用插件都可以解析这份共享的不可变快照（[`dsh-cmdline`](../../packages/boot/cmdline/README.md)）。因此，启动器的 flag 必须写在最前面；启动器无法识别的第一个 token 标志着应用参数的开始：

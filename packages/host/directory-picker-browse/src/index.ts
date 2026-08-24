@@ -9,7 +9,8 @@
  * @module @deepseek-ai/dsh-host-directory-picker-browse
  */
 
-import { mkdir, opendir, realpath, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { link, lstat, mkdir, open, opendir, realpath, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -20,6 +21,8 @@ import {
 import type {
   DirectoryEntry, DirectoryListing, DirectoryPickerCapability, DirectoryUploadChunk,
   DirectoryUploadProgress, DirectoryUploadSession, DirectoryUploadStart,
+  FileUploadChunk, FileUploadSession, FileUploadStart, WorkspaceFileEntry, WorkspaceFileListing,
+  WorkspaceDownloadTarget,
 } from '@deepseek-ai/dsh-host-directory-picker'
 import { fullyQualified, insidePath } from './path.ts'
 import { DirectoryUploadManager } from './upload.ts'
@@ -58,6 +61,8 @@ export interface ListingCandidate {
   name: string
   /** Dirent says directory (no probe needed). */
   isDirectory: boolean
+  /** Dirent says regular file (no probe needed). */
+  isFile: boolean
   /** Dirent says symlink (enterability needs a stat probe). */
   isSymbolicLink: boolean
 }
@@ -148,6 +153,64 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Whether a Node filesystem error carries the requested code. */
+function errorCode(error: unknown, code: string): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === code
+}
+
+/** Validate one user-created file or directory name. */
+function validSegment(name: string): boolean {
+  return name.trim() !== '' && name !== '.' && name !== '..' && !name.includes('\0') && !/[/\\]/.test(name)
+}
+
+/**
+ * Stream one directory into a bounded, name-sorted candidate window.
+ * @param target - canonical directory to scan.
+ * @param keep - retained candidate bound (usually result limit + one sentinel).
+ * @param signal - caller lifetime.
+ * @param accept - cheap dirent-only filter applied before the bounded window.
+ * @returns retained candidates and whether a name-sorted tail was evicted.
+ */
+async function scanCandidates(
+  target: string,
+  keep: number,
+  signal: AbortSignal | undefined,
+  accept: (candidate: ListingCandidate) => boolean,
+): Promise<{ window: ListingCandidate[]; evicted: boolean }> {
+  const window: ListingCandidate[] = []
+  let evicted = false
+  const opening = opendir(target)
+  const level = await raceAbort(opening, signal).catch((error: unknown) => {
+    void opening.then(dir => dir.close().catch(swallowCloseFailure), () => {
+      // Already rejected: raceAbort surfaced or swallowed it.
+    })
+    throw error
+  })
+  try {
+    for (;;) {
+      const dirent = await raceAbort(level.read(), signal)
+      if (dirent === null) break
+      const candidate = {
+        name: dirent.name,
+        isDirectory: dirent.isDirectory(),
+        isFile: dirent.isFile(),
+        isSymbolicLink: dirent.isSymbolicLink(),
+      }
+      if (!accept(candidate)) continue
+      if (boundedInsert(window, candidate, keep)) evicted = true
+    }
+  } finally {
+    const closing = level.close()
+    /* v8 ignore next 3 -- an abort between open and close needs a stalled read; the abandoned-close arm has no observable outcome. */
+    if (signal?.aborted) {
+      closing.catch(swallowCloseFailure)
+    } else {
+      await closing
+    }
+  }
+  return { window, evicted }
+}
+
 /**
  * One listing row for a dirent, following symlinks to directories; null for
  * non-directories and broken/cyclic links (skipped silently — the browser
@@ -176,6 +239,29 @@ async function directoryRow(
   return { name, path, hidden: name.startsWith('.') }
 }
 
+/** One file-tree row, following symlinks only to classify their targets. */
+async function workspaceFileRow(
+  parent: string, candidate: ListingCandidate, signal: AbortSignal | undefined,
+): Promise<WorkspaceFileEntry | null> {
+  const path = join(parent, candidate.name)
+  let kind: WorkspaceFileEntry['kind'] | undefined = candidate.isDirectory
+    ? 'directory'
+    : candidate.isFile ? 'file' : undefined
+  if (kind === undefined && candidate.isSymbolicLink) {
+    try {
+      const info = await raceAbort(stat(path), signal)
+      if (info.isDirectory()) kind = 'directory'
+      else if (info.isFile()) kind = 'file'
+    } catch {
+      /* v8 ignore next 2 -- an abort landing mid-probe needs a stalled stat; the per-candidate check covers the settled path. */
+      if (signal?.aborted) throw asError(signal.reason)
+      return null
+    }
+  }
+  if (kind === undefined) return null
+  return { name: candidate.name, path, kind, hidden: candidate.name.startsWith('.') }
+}
+
 /** Validated plugin configuration. */
 export interface Config {
   /** Complete-result bound of one listing level; see {@link BrowseDirectoryPicker.Config}. */
@@ -194,6 +280,14 @@ export interface Config {
   maxUploadFiles?: number
   /** Idle lifetime before an incomplete upload root is removed. */
   uploadLifetimeMs?: number
+}
+
+/** One single-file upload layered over the shared directory transaction owner. */
+interface FileUploadState {
+  /** Final visible file path. */
+  target: string
+  /** File name inside the hidden transaction root. */
+  name: string
 }
 
 /** The `ctx.directoryPicker` browse implementation (stable capability object per service life). */
@@ -217,16 +311,24 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
   })
 
   private readonly uploads: DirectoryUploadManager
+  private readonly fileUploads = new Map<string, FileUploadState>()
   private readonly configuredBrowseRoot: string | undefined
 
   private readonly browseCapability: DirectoryPickerCapability = {
     kind: 'browse',
     list: (path, signal) => this.list(path, signal),
     createDirectory: (path, name) => this.createDirectory(path, name),
+    listWorkspaceFiles: (path, signal) => this.listWorkspaceFiles(path, signal),
+    resolveWorkspaceDownload: (path, signal) => this.resolveWorkspaceDownload(path, signal),
+    createFile: (path, name) => this.createFile(path, name),
     beginDirectoryUpload: input => this.beginDirectoryUpload(input),
     writeDirectoryUpload: input => this.writeDirectoryUpload(input),
     completeDirectoryUpload: uploadId => this.completeDirectoryUpload(uploadId),
     abortDirectoryUpload: uploadId => this.abortDirectoryUpload(uploadId),
+    beginFileUpload: input => this.beginFileUpload(input),
+    writeFileUpload: input => this.writeFileUpload(input),
+    completeFileUpload: uploadId => this.completeFileUpload(uploadId),
+    abortFileUpload: uploadId => this.abortFileUpload(uploadId),
   }
 
   constructor(ctx: Context, private readonly config: Config) {
@@ -248,11 +350,18 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
     this.uploads = new DirectoryUploadManager(uploadConfig)
     ctx.effect(() => {
       const sweepMs = Math.min(uploadConfig.uploadLifetimeMs, 60_000)
-      const timer = setInterval(() => { void this.uploads.expire() }, sweepMs)
+      const timer = setInterval(() => {
+        void this.uploads.expire().then(() => {
+          for (const uploadId of this.fileUploads.keys()) {
+            if (!this.uploads.has(uploadId)) this.fileUploads.delete(uploadId)
+          }
+        })
+      }, sweepMs)
       timer.unref()
       return async () => {
         clearInterval(timer)
         await this.uploads.dispose()
+        this.fileUploads.clear()
       }
     }, 'directory-picker-browse: incomplete upload cleanup')
   }
@@ -265,7 +374,8 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
     return this.browseCapability
   }
 
-  private async list(path?: string, signal?: AbortSignal): Promise<DirectoryListing> {
+  /** Resolve and confine one listing target; both directory picker and file tree use the same Host path fence. */
+  private async resolveListingTarget(path?: string): Promise<{ home: string; target: string }> {
     let home = this.configuredBrowseRoot ?? homedir()
     // The seam contract takes fully qualified paths only; resolve() would
     // silently rebase a relative or empty wire value under the host process
@@ -287,6 +397,11 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
         throw new DirectoryPickerError('directory-unreadable', target, `cannot list ${target}: ${messageOf(error)}`)
       }
     }
+    return { home, target }
+  }
+
+  private async list(path?: string, signal?: AbortSignal): Promise<DirectoryListing> {
+    const { home, target } = await this.resolveListingTarget(path)
     // Stream the level (opendir, one dirent at a time) into a name-sorted
     // window of maxEntries + 1 candidates: memory stays bounded no matter how
     // many children the directory holds, the window keeps the name-sorted
@@ -294,50 +409,15 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
     // window candidate that turns out non-enterable (broken symlink) is not
     // backfilled from beyond the window — an eviction already marks the
     // level truncated, which stays the honest answer.
-    const keep = this.config.maxEntries + 1
-    const window: ListingCandidate[] = []
-    let evicted = false
+    let window: ListingCandidate[]
+    let evicted: boolean
     try {
-      // Every filesystem await races the caller's signal: a stalled
-      // opendir/read on a network filesystem must not keep a departed
-      // caller's scan alive, and an already-aborted request rejects even
-      // when the level is empty.
-      const opening = opendir(target)
-      const level = await raceAbort(opening, signal).catch((error: unknown) => {
-        // The abandoned open can still mint a handle after the abort won;
-        // close it so a departed caller cannot leak a descriptor. (A lost
-        // race against opendir's own rejection has nothing to close, and
-        // the close's own failure is swallowed — the request already
-        // returned, so a cleanup error has no consumer.)
-        void opening.then(dir => dir.close().catch(swallowCloseFailure), () => {
-          // Already rejected: raceAbort surfaced or swallowed it.
-        })
-        throw error
-      })
-      try {
-        for (;;) {
-          const dirent = await raceAbort(level.read(), signal)
-          if (dirent === null) break
-          // Only rows a browser could enter contend for the window; dirent
-          // says "directory" outright, a symlink needs the later stat probe.
-          if (!dirent.isDirectory() && !dirent.isSymbolicLink()) continue
-          const candidate = { name: dirent.name, isDirectory: dirent.isDirectory(), isSymbolicLink: dirent.isSymbolicLink() }
-          if (boundedInsert(window, candidate, keep)) evicted = true
-        }
-      } finally {
-        // Manual read() never auto-closes; close on every exit. The aborted
-        // exit must not await it — Node queues close behind any in-flight
-        // read, so awaiting would chain the departed caller back onto the
-        // very stall the abort escaped (the abandoned read's settlement is
-        // already swallowed by raceAbort).
-        const closing = level.close()
-        /* v8 ignore next 3 -- an abort between open and close needs a stalled read; the abandoned-close arm has no observable outcome. */
-        if (signal?.aborted) {
-          closing.catch(swallowCloseFailure)
-        } else {
-          await closing
-        }
-      }
+      ({ window, evicted } = await scanCandidates(
+        target,
+        this.config.maxEntries + 1,
+        signal,
+        candidate => candidate.isDirectory || candidate.isSymbolicLink,
+      ))
     } catch (error: unknown) {
       // An abort is the caller's own reason, not an unreadable directory.
       signal?.throwIfAborted()
@@ -361,6 +441,66 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
     return { path: target, home, crumbs: ancestryCrumbs(target, crumbRoot), entries, truncated }
   }
 
+  /** List one file-tree level through the same browse-root and abort fences as the directory chooser. */
+  private async listWorkspaceFiles(path: string, signal?: AbortSignal): Promise<WorkspaceFileListing> {
+    const { target } = await this.resolveListingTarget(path)
+    let window: ListingCandidate[]
+    let evicted: boolean
+    try {
+      ({ window, evicted } = await scanCandidates(
+        target,
+        this.config.maxEntries + 1,
+        signal,
+        candidate => candidate.isDirectory || candidate.isFile || candidate.isSymbolicLink,
+      ))
+    } catch (error: unknown) {
+      signal?.throwIfAborted()
+      throw new DirectoryPickerError('directory-unreadable', target, `cannot list ${target}: ${messageOf(error)}`)
+    }
+    const entries: WorkspaceFileEntry[] = []
+    let truncated = evicted
+    for (const candidate of window) {
+      signal?.throwIfAborted()
+      const row = await workspaceFileRow(target, candidate, signal)
+      if (row === null) continue
+      if (entries.length === this.config.maxEntries) {
+        truncated = true
+        break
+      }
+      entries.push(row)
+    }
+    return { path: target, entries, truncated }
+  }
+
+  /** Resolve one regular file or directory without allowing a symlink download boundary. */
+  private async resolveWorkspaceDownload(path: string, signal?: AbortSignal): Promise<WorkspaceDownloadTarget> {
+    if (!fullyQualified(path)) {
+      throw new DirectoryPickerError('directory-unreadable', path, `cannot download "${path}": not a fully qualified path`)
+    }
+    const requested = resolve(path)
+    const { target } = await this.resolveListingTarget(requested)
+    signal?.throwIfAborted()
+    try {
+      // Reject the browser-named entry itself when it is a symlink. The
+      // canonical realpath fence above prevents escapes, while this lstat
+      // keeps downloads from silently changing meaning after listing.
+      const sourceInfo = await raceAbort(lstat(requested), signal)
+      if (sourceInfo.isSymbolicLink()) {
+        throw new DirectoryPickerError('directory-unreadable', requested, 'symbolic links cannot be downloaded')
+      }
+      const info = await raceAbort(stat(target), signal)
+      const kind = info.isDirectory() ? 'directory' : info.isFile() ? 'file' : undefined
+      if (kind === undefined) {
+        throw new DirectoryPickerError('directory-unreadable', target, 'download target is not a regular file or directory')
+      }
+      return { path: target, name: basename(target), kind }
+    } catch (error: unknown) {
+      signal?.throwIfAborted()
+      if (error instanceof DirectoryPickerError) throw error
+      throw new DirectoryPickerError('directory-unreadable', target, `cannot download ${target}: ${messageOf(error)}`)
+    }
+  }
+
   private async createDirectory(path: string, name: string): Promise<string> {
     // Same fully-qualified fence as list: never rebase a parent under the
     // cwd or the current drive.
@@ -382,7 +522,7 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
     }
     // The backend owns segment validation (the wire schema also refuses these,
     // but direct service consumers must hit the same fence).
-    if (name.trim() === '' || name === '.' || name === '..' || /[/\\]/.test(name)) {
+    if (!validSegment(name)) {
       throw new DirectoryPickerError('directory-create-failed', join(parent, name), `"${name}" is not a single path segment`)
     }
     const target = join(parent, name)
@@ -393,6 +533,28 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
       return target
     } catch (error: unknown) {
       if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST') {
+        throw new DirectoryPickerError('directory-exists', target, `${target} already exists`)
+      }
+      throw new DirectoryPickerError('directory-create-failed', target, `cannot create ${target}: ${messageOf(error)}`)
+    }
+  }
+
+  /** Create one exclusive empty file under the confined browse root. */
+  private async createFile(path: string, name: string): Promise<string> {
+    if (!fullyQualified(path)) {
+      throw new DirectoryPickerError('directory-create-failed', path, `cannot create under "${path}": not a fully qualified parent path`)
+    }
+    if (!validSegment(name)) {
+      throw new DirectoryPickerError('directory-create-failed', join(path, name), `"${name}" is not a single path segment`)
+    }
+    const { target: parent } = await this.resolveListingTarget(path)
+    const target = join(parent, name)
+    try {
+      const handle = await open(target, 'wx', 0o600)
+      await handle.close()
+      return target
+    } catch (error: unknown) {
+      if (errorCode(error, 'EEXIST')) {
         throw new DirectoryPickerError('directory-exists', target, `${target} already exists`)
       }
       throw new DirectoryPickerError('directory-create-failed', target, `cannot create ${target}: ${messageOf(error)}`)
@@ -413,5 +575,74 @@ export default class BrowseDirectoryPicker extends DirectoryPicker {
 
   private abortDirectoryUpload(uploadId: string): Promise<void> {
     return this.uploads.abort(uploadId)
+  }
+
+  /** Begin one file as a one-entry hidden directory transaction. */
+  private async beginFileUpload(input: FileUploadStart): Promise<FileUploadSession> {
+    if (!validSegment(input.name)) {
+      throw new DirectoryPickerError('directory-upload-failed', input.name, `cannot upload "${input.name}": not a single path segment`)
+    }
+    const hiddenRoot = `.dsh-file-upload-${randomUUID()}`
+    const session = await this.uploads.begin({
+      parentPath: input.parentPath,
+      name: hiddenRoot,
+      fileCount: 1,
+      totalBytes: input.totalBytes,
+    })
+    const target = join(dirname(session.path), input.name)
+    try {
+      await lstat(target)
+      await this.uploads.abort(session.uploadId)
+      throw new DirectoryPickerError('directory-exists', target, `${target} already exists`)
+    } catch (error: unknown) {
+      if (error instanceof DirectoryPickerError) throw error
+      if (!errorCode(error, 'ENOENT')) {
+        await this.uploads.abort(session.uploadId)
+        throw new DirectoryPickerError('directory-upload-failed', target, `cannot inspect upload destination: ${messageOf(error)}`)
+      }
+    }
+    this.fileUploads.set(session.uploadId, { target, name: input.name })
+    return { uploadId: session.uploadId, path: target, maxChunkBytes: session.maxChunkBytes }
+  }
+
+  /** Append one ordered chunk through the shared transaction owner. */
+  private writeFileUpload(input: FileUploadChunk): Promise<DirectoryUploadProgress> {
+    const state = this.fileUploads.get(input.uploadId)
+    if (state === undefined) {
+      throw new DirectoryPickerError('directory-upload-failed', input.uploadId, 'file upload is unknown or expired')
+    }
+    return this.uploads.write({ ...input, path: state.name })
+  }
+
+  /** Publish the completed one-file transaction without replacing an existing file. */
+  private async completeFileUpload(uploadId: string): Promise<string> {
+    const state = this.fileUploads.get(uploadId)
+    if (state === undefined) {
+      throw new DirectoryPickerError('directory-upload-failed', uploadId, 'file upload is unknown or expired')
+    }
+    const root = await this.uploads.complete(uploadId)
+    try {
+      await link(join(root, state.name), state.target)
+    } catch (error: unknown) {
+      this.fileUploads.delete(uploadId)
+      await rm(root, { recursive: true, force: true }).catch(() => {
+        // The hidden transaction root is never a visible Workspace entry; a later manual cleanup can remove it.
+      })
+      if (errorCode(error, 'EEXIST')) {
+        throw new DirectoryPickerError('directory-exists', state.target, `${state.target} already exists`)
+      }
+      throw new DirectoryPickerError('directory-upload-failed', state.target, `cannot publish file upload: ${messageOf(error)}`)
+    }
+    this.fileUploads.delete(uploadId)
+    await rm(root, { recursive: true, force: true }).catch(() => {
+      // The file is already atomically published; cleanup cannot turn a successful commit into an unknown outcome.
+    })
+    return state.target
+  }
+
+  /** Abort one incomplete file transaction. */
+  private async abortFileUpload(uploadId: string): Promise<void> {
+    await this.uploads.abort(uploadId)
+    this.fileUploads.delete(uploadId)
   }
 }

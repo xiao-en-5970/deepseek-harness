@@ -110,6 +110,15 @@ export class DirectoryUploadManager {
   }
 
   /**
+   * Report whether an upload identity is still owned by this process.
+   * @param uploadId - Opaque identity returned by {@link begin}.
+   * @returns True while the upload can accept another operation.
+   */
+  has(uploadId: string): boolean {
+    return this.states.has(uploadId)
+  }
+
+  /**
    * Begin one bounded upload under an existing authorized parent.
    * @param input - Requested parent/root name and exact manifest totals.
    * @returns Opaque upload identity, eventual root, and decoded chunk bound.

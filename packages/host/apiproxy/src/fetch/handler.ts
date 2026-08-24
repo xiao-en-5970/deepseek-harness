@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import type { z } from 'zod'
 import type { ApiProxy, MuxFrame, HostFrame } from '../api/index.ts'
-import { sessionLogQuerySchema } from '../api/downloads.schema.ts'
+import { sessionLogQuerySchema, workspacePathQuerySchema } from '../api/downloads.schema.ts'
 import type { RequestPayload, ResponseValue, RpcMethodMap } from '../api/rpc-map.ts'
 import type { ClientRequest, RpcError, RpcRequest, RpcResponse, ServerRequest, ServerResponse } from '../api/rpc.ts'
 import { RpcId } from '../api/rpc.ts'
@@ -30,10 +30,12 @@ import {
   sessionUpdateQueueRequestSchema,
 } from '../api/sessions.schema.ts'
 import {
-  hostAbortDirectoryUploadRequestSchema, hostBeginDirectoryUploadRequestSchema,
-  hostCompleteDirectoryUploadRequestSchema, hostCreateDirectoryRequestSchema, hostDescribeRequestSchema,
-  hostListDirectoryRequestSchema, hostOpenPathRequestSchema,
-  hostPickDirectoryRequestSchema, hostWriteDirectoryUploadRequestSchema,
+  hostAbortDirectoryUploadRequestSchema, hostAbortFileUploadRequestSchema,
+  hostBeginDirectoryUploadRequestSchema, hostBeginFileUploadRequestSchema,
+  hostCompleteDirectoryUploadRequestSchema, hostCompleteFileUploadRequestSchema,
+  hostCreateDirectoryRequestSchema, hostCreateFileRequestSchema, hostDescribeRequestSchema,
+  hostListDirectoryRequestSchema, hostListWorkspaceFilesRequestSchema, hostOpenPathRequestSchema,
+  hostPickDirectoryRequestSchema, hostWriteDirectoryUploadRequestSchema, hostWriteFileUploadRequestSchema,
 } from '../api/host.schema.ts'
 import {
   workspaceArchiveSessionRequestSchema,
@@ -64,7 +66,9 @@ import {
 import {
   credentialsDescribeRequestSchema, credentialsSetRequestSchema, credentialsUnsetRequestSchema,
 } from '../api/credentials.schema.ts'
-import { llmDiscoverModelsRequestSchema, llmModelsRequestSchema, llmProvidersRequestSchema } from '../api/llm.schema.ts'
+import {
+  llmBalanceRequestSchema, llmDiscoverModelsRequestSchema, llmModelsRequestSchema, llmProvidersRequestSchema,
+} from '../api/llm.schema.ts'
 import {
   subagentHistoryRequestSchema,
   subagentInterruptRequestSchema,
@@ -109,10 +113,16 @@ const UNARY_ROUTES: UnaryRoutes = {
   'host.pickDirectory': { schema: hostPickDirectoryRequestSchema, invoke: (api, r, signal) => api.host.pickDirectory(r, signal) },
   'host.listDirectory': { schema: hostListDirectoryRequestSchema, invoke: (api, r, signal) => api.host.listDirectory(r, signal) },
   'host.createDirectory': { schema: hostCreateDirectoryRequestSchema, invoke: (api, r) => api.host.createDirectory(r) },
+  'host.listWorkspaceFiles': { schema: hostListWorkspaceFilesRequestSchema, invoke: (api, r, signal) => api.host.listWorkspaceFiles(r, signal) },
+  'host.createFile': { schema: hostCreateFileRequestSchema, invoke: (api, r) => api.host.createFile(r) },
   'host.beginDirectoryUpload': { schema: hostBeginDirectoryUploadRequestSchema, invoke: (api, r) => api.host.beginDirectoryUpload(r) },
   'host.writeDirectoryUpload': { schema: hostWriteDirectoryUploadRequestSchema, invoke: (api, r) => api.host.writeDirectoryUpload(r) },
   'host.completeDirectoryUpload': { schema: hostCompleteDirectoryUploadRequestSchema, invoke: (api, r) => api.host.completeDirectoryUpload(r) },
   'host.abortDirectoryUpload': { schema: hostAbortDirectoryUploadRequestSchema, invoke: (api, r) => api.host.abortDirectoryUpload(r) },
+  'host.beginFileUpload': { schema: hostBeginFileUploadRequestSchema, invoke: (api, r) => api.host.beginFileUpload(r) },
+  'host.writeFileUpload': { schema: hostWriteFileUploadRequestSchema, invoke: (api, r) => api.host.writeFileUpload(r) },
+  'host.completeFileUpload': { schema: hostCompleteFileUploadRequestSchema, invoke: (api, r) => api.host.completeFileUpload(r) },
+  'host.abortFileUpload': { schema: hostAbortFileUploadRequestSchema, invoke: (api, r) => api.host.abortFileUpload(r) },
   'host.openPath': { schema: hostOpenPathRequestSchema, invoke: (api, r, signal) => api.host.openPath(r, signal) },
   'workspace.list': { schema: workspaceListRequestSchema, invoke: (api, r) => api.workspace.list(r) },
   'workspace.create': { schema: workspaceCreateRequestSchema, invoke: (api, r) => api.workspace.create(r) },
@@ -144,6 +154,7 @@ const UNARY_ROUTES: UnaryRoutes = {
   'credentials.unset': { schema: credentialsUnsetRequestSchema, invoke: (api, r) => api.credentials.unset(r) },
   'llm.providers': { schema: llmProvidersRequestSchema, invoke: (api, r) => api.llm.providers(r) },
   'llm.models': { schema: llmModelsRequestSchema, invoke: (api, r) => api.llm.models(r) },
+  'llm.balance': { schema: llmBalanceRequestSchema, invoke: (api, r, signal) => api.llm.balance(r, signal) },
   'llm.discoverModels': { schema: llmDiscoverModelsRequestSchema, invoke: (api, r, signal) => api.llm.discoverModels(r, signal) },
 }
 
@@ -179,7 +190,6 @@ function fullResponse(narrow: RpcResponse<unknown>): Response {
  */
 // K appears once in the signature but ties the UNARY_ROUTES[K] row lookup to its own
 // schema/invoke pairing; a union parameter degrades the row to an uninvokable intersection.
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters
 async function handleUnary<K extends keyof RpcMethodMap>(
   api: ApiProxy, method: K, message: ClientRequest, signal: AbortSignal,
 ): Promise<Response> {
@@ -270,6 +280,19 @@ export function toFetchHandler(api: ApiProxy): { fetch: typeof fetch } {
           return new Response('missing or invalid sessionId query parameter', { status: 400 })
         }
         const response = await api.downloads.sessionLog(parsed.data, req.signal)
+        if (req.method === 'GET') return response
+        await response.body?.cancel()
+        return new Response(null, { status: response.status, headers: response.headers })
+      }
+      if (path === '/api/workspace.download' && (req.method === 'GET' || req.method === 'HEAD')) {
+        const parsed = workspacePathQuerySchema.safeParse(Object.fromEntries(url.searchParams))
+        if (!parsed.success) {
+          return new Response('missing or invalid path query parameter', { status: 400 })
+        }
+        if (api.downloads.workspacePath === undefined) {
+          return new Response('Workspace download is unavailable.', { status: 501 })
+        }
+        const response = await api.downloads.workspacePath(parsed.data, req.signal)
         if (req.method === 'GET') return response
         await response.body?.cancel()
         return new Response(null, { status: response.status, headers: response.headers })

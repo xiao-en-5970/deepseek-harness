@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto'
 import { attributionHeaders, contentHasImage, CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions,
+  LlmAccountBalance,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
@@ -273,6 +274,50 @@ export class DeepSeekAdapter extends LlmAdapter {
 
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     return Promise.resolve(this.config.options().models.map(model => modelInfo(provider, model)))
+  }
+
+  override async accountBalance(provider: string, signal?: AbortSignal): Promise<LlmAccountBalance> {
+    const connection = this.config.options()
+    const apiKey = await this.config.resolveApiKey(connection)
+    let response: Response
+    try {
+      response = await fetch(`${connection.baseURL}/user/balance`, {
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          accept: 'application/json',
+          ...attributionHeaders(),
+        },
+        ...signal === undefined ? {} : { signal },
+      })
+    } catch (error: unknown) {
+      throw new LlmError(`DeepSeek balance request to ${connection.baseURL} failed`, 'TRANSPORT', { cause: error })
+    }
+    if (!response.ok) {
+      throw new LlmError(`DeepSeek balance API error (HTTP ${response.status})`, httpErrorCode(response.status), {
+        status: response.status,
+      })
+    }
+    const body = await response.json() as {
+      is_available?: unknown
+      balance_infos?: Array<Record<string, unknown>>
+    }
+    if (typeof body.is_available !== 'boolean' || !Array.isArray(body.balance_infos)) {
+      throw new LlmError('DeepSeek balance API returned an invalid response', 'INVALID_RESPONSE')
+    }
+    return {
+      provider,
+      available: body.is_available,
+      balances: body.balance_infos.flatMap((item) => {
+        const currency = item.currency
+        const totalBalance = item.total_balance
+        const grantedBalance = item.granted_balance
+        const toppedUpBalance = item.topped_up_balance
+        return typeof currency === 'string' && typeof totalBalance === 'string'
+          && typeof grantedBalance === 'string' && typeof toppedUpBalance === 'string'
+          ? [{ currency, totalBalance, grantedBalance, toppedUpBalance }]
+          : []
+      }),
+    }
   }
 
   override resolveModel(

@@ -3,7 +3,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {
   DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart, IApiClient, RpcError,
-  SessionId, WorkspaceId, WorkspaceView,
+  FileUploadChunk, FileUploadSession, FileUploadStart, SessionId,
+  WorkspaceFileListing, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SnapshotStore } from '../contract/store.ts'
 import { createSnapshotStore } from '../contract/store.ts'
@@ -238,6 +239,20 @@ export class WorkspaceRuntime implements IWorkspaces {
     return response.result.value.path
   }
 
+  /** List one current-Workspace file-tree level through the Host browse provider. */
+  async listWorkspaceFiles(path: string, signal?: AbortSignal): Promise<WorkspaceFileListing> {
+    const response = await this.api.host.listWorkspaceFiles({ path }, signal)
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+    return response.result.value
+  }
+
+  /** Create one exclusive empty file through the Host browse provider. */
+  async createFile(path: string, name: string): Promise<string> {
+    const response = await this.api.host.createFile({ path, name })
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+    return response.result.value.path
+  }
+
   /** Begin one bounded local-directory upload under an existing Host path. */
   async beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession> {
     const response = await this.api.host.beginDirectoryUpload(input)
@@ -262,6 +277,33 @@ export class WorkspaceRuntime implements IWorkspaces {
   /** Remove an incomplete upload root; the Host makes unknown ids idempotent. */
   async abortDirectoryUpload(uploadId: string): Promise<void> {
     const response = await this.api.host.abortDirectoryUpload({ uploadId })
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+  }
+
+  /** Begin one bounded local-file upload under an existing Host path. */
+  async beginFileUpload(input: FileUploadStart): Promise<FileUploadSession> {
+    const response = await this.api.host.beginFileUpload(input)
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+    return response.result.value
+  }
+
+  /** Append one ordered local-file chunk and return its next acknowledged offset. */
+  async writeFileUpload(input: FileUploadChunk): Promise<number> {
+    const response = await this.api.host.writeFileUpload(input)
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+    return response.result.value.offset
+  }
+
+  /** Publish one complete local-file upload. */
+  async completeFileUpload(uploadId: string): Promise<string> {
+    const response = await this.api.host.completeFileUpload({ uploadId })
+    if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
+    return response.result.value.path
+  }
+
+  /** Remove one incomplete local-file upload. */
+  async abortFileUpload(uploadId: string): Promise<void> {
+    const response = await this.api.host.abortFileUpload({ uploadId })
     if (!response.result.ok) throw new DirectoryBrowseError(response.result.error)
   }
 

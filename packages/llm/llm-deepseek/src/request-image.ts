@@ -5,12 +5,15 @@ import sharp, { type Sharp } from 'sharp'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { ImageMediaType, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 
+/** Maximum pixels in one image sent to DeepSeek. */
 export const MAX_REQUEST_IMAGE_PIXELS = 640_000
+/** Maximum encoded bytes in one image sent to DeepSeek. */
 export const MAX_REQUEST_IMAGE_BYTES = 1024 * 1024
 const TRANSFORM_VERSION = 'deepseek-vision-v1'
 const QUALITIES = [85, 80] as const
 const CACHE_ENTRIES = 128
 
+/** Deterministic provider-ready image variant. */
 export interface RequestImage {
   variantId: string
   data: Uint8Array
@@ -21,6 +24,13 @@ export interface RequestImage {
 
 const cache = new Map<string, Promise<RequestImage>>()
 
+/**
+ * Scale image dimensions to an exact pixel ceiling without enlargement.
+ * @param width - source width in pixels.
+ * @param height - source height in pixels.
+ * @param maxPixels - maximum output pixel count.
+ * @returns bounded integer dimensions preserving aspect ratio.
+ */
 export function requestImageDimensions(
   width: number,
   height: number,
@@ -110,7 +120,11 @@ async function createRequestImage(stored: StoredImageAttachment, variantId: stri
   throw new LlmError('DeepSeek image cannot fit the 1 MiB request limit.', 'INVALID_REQUEST')
 }
 
-/** Prepare and share one immutable attachment variant across concurrent requests. */
+/**
+ * Prepare and share one immutable attachment variant across concurrent requests.
+ * @param stored - validated durable image attachment.
+ * @returns deterministic provider-ready image bytes.
+ */
 export function prepareRequestImage(stored: StoredImageAttachment): Promise<RequestImage> {
   const variantId = `sha256:${createHash('sha256')
     .update(`${TRANSFORM_VERSION}\0${stored.ref.attachmentId}`)

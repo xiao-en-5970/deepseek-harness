@@ -128,6 +128,12 @@ function registerTextOnly(ctx: Context): void {
   }('Text Only', []))
 }
 
+function registerImageBridge(ctx: Context): void {
+  ctx.provide('tools', {
+    schemas: () => [{ name: 'generate_image', description: 'image bridge', parameters: {} }],
+  } as never)
+}
+
 describe('Web session model selection', () => {
   it('validates an ordered image batch before persisting any member', async () => {
     const { ctx, agent, sessionId } = await harness()
@@ -232,6 +238,75 @@ describe('Web session model selection', () => {
       sessionId, provider: 'text-only', model: 'plain',
     }))).selected).toEqual({ provider: 'text-only', model: 'plain' })
     await ctx.fiber.dispose()
+  })
+
+  it('allows text-only models to retain user images only through generate_image', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    registerTextOnly(ctx)
+    registerImageBridge(ctx)
+    const image = {
+      type: 'image' as const,
+      attachment: { attachmentId: 'att-bridge', mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1 },
+    }
+    agent.session.append('user/message', {
+      id: 'image-bridge-message', role: 'user', source: { kind: 'user' }, content: [image],
+    } as never, { surfaceOp: 'append' })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }),
+      cwd: '/tmp',
+    })
+    expect(expectValue(await api.sessions.selectModel(request({
+      sessionId, provider: 'text-only', model: 'plain',
+    }))).selected).toEqual({ provider: 'text-only', model: 'plain' })
+    await ctx.fiber.dispose()
+  })
+
+  it('admits direct images to a text-only model only when the image bridge is registered', async () => {
+    const denied = await harness()
+    registerTextOnly(denied.ctx)
+    const deniedApi = createApiProxy(denied.ctx, {
+      defaultModelSelection: () => ({ provider: 'text-only', model: 'plain' }), cwd: '/tmp',
+    })
+    expect((await deniedApi.sessions.prompt(request({
+      sessionId: denied.sessionId,
+      mode: 'queue' as const,
+      content: [{ type: 'image' as const, mediaType: 'image/png' as const, data: 'AQ==' }],
+    }))).result).toMatchObject({
+      ok: false, error: { code: 'attachment-error', details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' } },
+    })
+    await denied.ctx.fiber.dispose()
+
+    const allowed = await harness()
+    registerTextOnly(allowed.ctx)
+    registerImageBridge(allowed.ctx)
+    const ref = {
+      attachmentId: 'att-direct', mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1,
+    }
+    allowed.ctx.provide('attachments', {
+      imageLimits: {
+        maxImageBytes: 4, maxImagesPerMessage: 2, maxMessageImageBytes: 4,
+        maxImagePixels: 4, mediaTypes: ['image/png'],
+      },
+      validateImage: () => Promise.resolve(),
+      saveImage: () => Promise.resolve(ref),
+    } as never)
+    const followup = vi.fn()
+    Object.assign(allowed.agent, { followup })
+    const allowedApi = createApiProxy(allowed.ctx, {
+      defaultModelSelection: () => ({ provider: 'text-only', model: 'plain' }), cwd: '/tmp',
+    })
+    expect((await allowedApi.sessions.prompt(request({
+      sessionId: allowed.sessionId,
+      mode: 'queue' as const,
+      content: [
+        { type: 'text' as const, text: 'edit this' },
+        { type: 'image' as const, mediaType: 'image/png' as const, data: 'AQ==' },
+      ],
+    }))).result.ok).toBe(true)
+    expect((followup.mock.calls[0]?.[0] as UserMessage).content).toEqual([
+      { type: 'text', text: 'edit this' }, { type: 'image', attachment: ref },
+    ])
+    await allowed.ctx.fiber.dispose()
   })
 
   it('authorizes attachment bytes only when the session event stream references the id', async () => {

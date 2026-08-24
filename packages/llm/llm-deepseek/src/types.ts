@@ -53,6 +53,7 @@ export interface WireImageUrlContentPart {
   image_url: { url: string }
 }
 
+/** One ordered text, uploaded-file, or inline-image part in a user message. */
 export type WireUserContentPart = WireTextContentPart | WireFileContentPart | WireImageUrlContentPart
 
 /** User-role message: compact text or ordered multimodal input. */

@@ -7,7 +7,7 @@
   - tablist:
     - tab "Chat" [selected]
     - tab "Trajectory"
-- text: m1 7/25 {{clock}}
+- text: 28 turns · 28 steps LLM {{duration}} m1 7/25 {{clock}}
 - button "Copy":
   - img
 - paragraph: r1
@@ -354,4 +354,3 @@
   - text: DeepSeek-V4-Flash
   - img
 - button "Send message" [disabled]
-- text: 28 turns · 28 steps LLM {{duration}}

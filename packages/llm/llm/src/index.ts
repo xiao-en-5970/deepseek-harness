@@ -10,6 +10,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type {
   GenerateOptions,
   LlmConfigurableProvider,
+  LlmAccountBalance,
   LlmDiscoveredModel,
   LlmFailure,
   LlmModelContext,
@@ -205,6 +206,16 @@ export abstract class LlmAdapter {
    */
   listModels(_provider: string): Promise<readonly LlmModelInfo[]> {
     return Promise.resolve([])
+  }
+
+  /**
+   * Read this route's provider account balance, when the provider exposes one.
+   * @param _provider - one provider route owned by this adapter.
+   * @param _signal - optional cancellation for provider lookup.
+   * @returns provider balance data, or undefined when unsupported.
+   */
+  accountBalance(_provider: string, _signal?: AbortSignal): Promise<LlmAccountBalance | undefined> {
+    return Promise.resolve(undefined)
   }
 
   /**
@@ -605,6 +616,25 @@ export class LlmRuntime extends Service {
         ...inputModalities === undefined ? {} : { inputModalities },
       }
     })
+  }
+
+  /**
+   * Read one registered route's account balance without exposing its credential.
+   * @param provider - registered provider route to inspect.
+   * @param signal - optional cancellation for the provider request.
+   * @returns detached balance data, or undefined when the adapter does not expose balance lookup.
+   */
+  async accountBalance(provider: string, signal?: AbortSignal): Promise<LlmAccountBalance | undefined> {
+    const balance = await this.registration(provider).adapter.accountBalance(provider, signal)
+    if (balance === undefined) return undefined
+    if (balance.provider !== provider || typeof balance.available !== 'boolean') {
+      throw new LlmError(`adapter returned invalid account balance for provider "${provider}"`, 'INVALID_BALANCE')
+    }
+    return {
+      provider,
+      available: balance.available,
+      balances: balance.balances.map(item => ({ ...item })),
+    }
   }
 
   /**

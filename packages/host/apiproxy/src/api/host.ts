@@ -32,6 +32,28 @@ export interface DirectoryListing {
   truncated: boolean
 }
 
+/** One direct child in the current Workspace file tree. */
+export interface WorkspaceFileEntry {
+  /** Base name shown in the file tree. */
+  name: string
+  /** Absolute Host path returned verbatim to later file operations. */
+  path: string
+  /** Whether this row is expandable or a leaf. */
+  kind: 'directory' | 'file'
+  /** Hidden by the Host platform's convention. */
+  hidden: boolean
+}
+
+/** One bounded level of the current Workspace file tree. */
+export interface WorkspaceFileListing {
+  /** Absolute path of the listed directory. */
+  path: string
+  /** Direct children in name order. */
+  entries: WorkspaceFileEntry[]
+  /** True when the provider cut the name-sorted tail at its result bound. */
+  truncated: boolean
+}
+
 /** Manifest totals and destination for one browser-to-host directory upload. */
 export interface DirectoryUploadStart {
   parentPath: string
@@ -53,6 +75,38 @@ export interface DirectoryUploadChunk {
   path: string
   offset: number
   data: string
+  done: boolean
+}
+
+/** Destination and exact byte total of one local-file upload. */
+export interface FileUploadStart {
+  /** Fully qualified existing directory that receives the file. */
+  parentPath: string
+  /** Single destination file-name segment. */
+  name: string
+  /** Exact decoded byte total expected before publication. */
+  totalBytes: number
+}
+
+/** Server-owned file-upload identity and decoded chunk bound. */
+export interface FileUploadSession {
+  /** Opaque identity used by later upload operations. */
+  uploadId: string
+  /** Eventual absolute destination path. */
+  path: string
+  /** Maximum decoded bytes accepted in one write request. */
+  maxChunkBytes: number
+}
+
+/** One ordered base64 chunk of an active file upload. */
+export interface FileUploadChunk {
+  /** Opaque identity returned by begin. */
+  uploadId: string
+  /** Exact next byte offset expected before this chunk. */
+  offset: number
+  /** Canonical standard-base64 decoded and appended by the Host. */
+  data: string
+  /** True for the final chunk, including the empty chunk of an empty file. */
   done: boolean
 }
 
@@ -107,6 +161,17 @@ export interface HostApi {
     request: RpcRequest<{ path: string; name: string }>,
   ): Promise<RpcResponse<{ path: string }>>
 
+  /** List files and directories in one current-Workspace tree level. */
+  listWorkspaceFiles(
+    request: RpcRequest<{ path: string }>,
+    signal: AbortSignal,
+  ): Promise<RpcResponse<WorkspaceFileListing>>
+
+  /** Create one exclusive empty file under an existing directory. */
+  createFile(
+    request: RpcRequest<{ path: string; name: string }>,
+  ): Promise<RpcResponse<{ path: string }>>
+
   /** Create an isolated root and begin one bounded local-directory upload. */
   beginDirectoryUpload(
     request: RpcRequest<DirectoryUploadStart>,
@@ -124,6 +189,26 @@ export interface HostApi {
 
   /** Remove an incomplete upload; the operation is idempotent for unknown ids. */
   abortDirectoryUpload(
+    request: RpcRequest<{ uploadId: string }>,
+  ): Promise<RpcResponse<{ aborted: true }>>
+
+  /** Begin one bounded local-file upload. */
+  beginFileUpload(
+    request: RpcRequest<FileUploadStart>,
+  ): Promise<RpcResponse<FileUploadSession>>
+
+  /** Append one ordered chunk to an active file upload. */
+  writeFileUpload(
+    request: RpcRequest<FileUploadChunk>,
+  ): Promise<RpcResponse<{ offset: number }>>
+
+  /** Publish one complete file upload. */
+  completeFileUpload(
+    request: RpcRequest<{ uploadId: string }>,
+  ): Promise<RpcResponse<{ path: string }>>
+
+  /** Remove one incomplete file upload. */
+  abortFileUpload(
     request: RpcRequest<{ uploadId: string }>,
   ): Promise<RpcResponse<{ aborted: true }>>
 

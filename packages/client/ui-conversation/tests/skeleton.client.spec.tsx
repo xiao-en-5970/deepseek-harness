@@ -322,17 +322,23 @@ describe('ConversationRoot resident composer', () => {
     expect(b.open).toHaveBeenCalledWith(sid('root'))
   })
 
-  it('active phase: fixed header outside the scrollport; sticky composer seat inside it', () => {
+  it('active phase: complete metadata band leads the work area; composer stays inside it', () => {
     const b = mount(conversationSnapshot())
     const host = b.view.container.querySelector('[data-conversation-scroll]')
     const seat = b.view.container.querySelector('[data-composer-seat]')
     const header = b.view.container.querySelector('header')
+    const metadata = b.view.getByTestId('view-conversation.composer.dock')
     const textarea = b.view.container.querySelector('textarea')
     expect(host).not.toBeNull()
     expect(seat).not.toBeNull()
     expect(header).not.toBeNull()
-    // Header is column chrome above the scrollport; the seat sticks inside it.
+    // Header is column chrome above the scrollport. Metadata leads that one
+    // scroll axis, independent of the composer footer, so it keeps the full
+    // conversation width and can wrap every metric group without resizing the
+    // scroll viewport when asynchronous balance data arrives.
     expect(host?.contains(header)).toBe(false)
+    expect(host?.contains(metadata)).toBe(true)
+    expect(host?.firstElementChild).toBe(metadata)
     expect(host?.contains(seat)).toBe(true)
     expect(seat?.contains(textarea)).toBe(true)
     expect(b.slotCalls).toContain('conversation.session.header.actions')

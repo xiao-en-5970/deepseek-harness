@@ -70,12 +70,14 @@ describe('parseDshArgs', () => {
     expect(parse([
       'tenant-web', '--port', '0', '--tenant-root', '/tmp/tenants',
       '--max-active-tenants', '3', '--idle-timeout-ms', '50', '--start-timeout-ms', '70',
+      '--default-skin', 'maid-atelier',
       '--patch', 'base.yml', '--patch', 'site.yml',
     ])).toEqual({
       mode: 'tenant-web',
       host: '127.0.0.1',
       port: 0,
       tenantRoot: '/tmp/tenants',
+      defaultSkin: 'maid-atelier',
       maxActiveTenants: 3,
       idleTimeoutMs: 50,
       startTimeoutMs: 70,
@@ -128,6 +130,8 @@ describe('parseDshArgs', () => {
     expect(exitCode(['tenant-web', '--max-active-tenants', '0'])).toBe(1)
     expect(exitCode(['tenant-web', '--idle-timeout-ms', 'x'])).toBe(1)
     expect(exitCode(['tenant-web', '--start-timeout-ms', '0'])).toBe(1)
+    expect(exitCode(['tenant-web', '--default-skin', 'Maid Atelier'])).toBe(1)
+    expect(exitCode(['tenant-web', '--default-skin', 'a'.repeat(65)])).toBe(1)
   })
 
   it('keeps its own help for an invocation with no app to hand it to', () => {

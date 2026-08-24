@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-// StatsLine (composer.dock entry): totals derivation + the RFC hard
+// StatsLine (session metadata band): totals derivation + the RFC hard
 // acceptance — zero renders during streaming.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, render } from '@testing-library/react'
 import type {
   AssistantMessageNode, ConversationSnapshot, SessionId, ToolResultNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
@@ -20,17 +20,8 @@ import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
 const t: StatsLineProps['t'] = makeTranslate(zh, commonZh)
 const tEn: StatsLineProps['t'] = makeTranslate(en, commonEn)
 
-/** jsdom has no ResizeObserver; StatsLine watches its row for ellipsis truncation through one. */
-class ResizeObserverStub {
-  observe(): void {}
-  unobserve(): void {}
-  disconnect(): void {}
-}
-
-beforeEach(() => { vi.stubGlobal('ResizeObserver', ResizeObserverStub) })
 afterEach(() => {
   cleanup()
-  vi.unstubAllGlobals()
   vi.restoreAllMocks()
   vi.useRealTimers()
 })
@@ -205,28 +196,13 @@ describe('StatsLine', () => {
     expect(emptyView.container.textContent).toBe('')
   })
 
-  it('reveals the full line in a delayed hover tooltip only while the row is clipped', () => {
-    vi.useFakeTimers()
-    // jsdom lays nothing out; fake a row narrower than its content.
-    vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockReturnValue(800)
-    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(400)
+  it('renders every metadata group directly without an ellipsis-only fallback', () => {
     const { source } = makeSource({ nodes: [assistant(1, 1)] })
     const view = render(<StatsLine {...props(source)} />)
-    fireEvent.mouseEnter(view.container.firstElementChild!)
-    act(() => { vi.advanceTimersByTime(499) })
     expect(view.container.querySelector('[role="tooltip"]')).toBeNull()
-    act(() => { vi.advanceTimersByTime(1) })
-    expect(view.container.querySelector('[role="tooltip"]')?.textContent)
+    expect(view.container.querySelectorAll('span')).toHaveLength(5)
+    expect(view.container.firstElementChild?.getAttribute('aria-label'))
       .toBe('1 turns · 1 steps | Cache hit 90% | Input 100 tok · Output 5 tok')
-  })
-
-  it('suppresses the tooltip while the row fits without truncation', () => {
-    vi.useFakeTimers()
-    const { source } = makeSource({ nodes: [assistant(1, 1)] })
-    const view = render(<StatsLine {...props(source)} />)
-    fireEvent.mouseEnter(view.container.firstElementChild!)
-    act(() => { vi.advanceTimersByTime(500) })
-    expect(view.container.querySelector('[role="tooltip"]')).toBeNull()
   })
 
   it('renders window latency and throughput beside the wall-time group', () => {
@@ -248,12 +224,6 @@ describe('StatsLine', () => {
     const view = render(<StatsLine {...props(source)} t={t} />)
     expect(view.container.textContent)
       .toBe('1 轮 · 1 步| LLM 3.8s| 首 token 平均 0.8s · 20 tok/s| 缓存命中 90%| 输入 100 tok · 输出 5 tok')
-  })
-
-  it('renders without ResizeObserver support', () => {
-    vi.unstubAllGlobals()
-    const { source } = makeSource({ nodes: [assistant(1, 1)] })
-    expect(() => render(<StatsLine {...props(source)} />)).not.toThrow()
   })
 
   it('keeps durable token groups after the visible step window is empty', () => {

@@ -10,6 +10,11 @@ import { z } from 'zod'
 import type { DownloadsApi } from './downloads.ts'
 import { sessionIdSchema } from './sessions.schema.ts'
 
+/** workspace.download query params → the direct download request. */
+export const workspacePathQuerySchema = z.object({
+  path: z.string().min(1),
+}) satisfies z.ZodType<{ path: string }>
+
 /**
  * session.export query params → the sessionLog request. `includeDescendants`
  * accepts exactly `true`/`false`/absent; any other value is rejected (400) so

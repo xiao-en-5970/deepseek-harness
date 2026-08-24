@@ -491,7 +491,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/image/codex-image-proxy/src/index.ts:48`](../packages/image/codex-image-proxy/src/index.ts)
+Source: [`packages/image/codex-image-proxy/src/index.ts:54`](../packages/image/codex-image-proxy/src/index.ts)
 
 <a id="deepseek-aidsh-compaction-basic"></a>
 
@@ -829,7 +829,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/host/directory-picker-browse/src/index.ts:180`](../packages/host/directory-picker-browse/src/index.ts)
+Source: [`packages/host/directory-picker-browse/src/index.ts:266`](../packages/host/directory-picker-browse/src/index.ts)
 
 <a id="deepseek-aidsh-host-frontend-static"></a>
 
@@ -946,12 +946,14 @@ export interface DeepSeekCatalogModel {
   contextWindow?: number
   /** Per-request output cap for this model; omission falls back to the profile's {@link DeepSeekConnectionOptions.maxTokens}. */
   maxTokens?: number
+  /** Input types accepted by this model; omission means text only. */
+  inputModalities?: ModelModality[]
 }
 ```
 
-Depends on: [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts)
+Depends on: [`ModelModality`](../packages/llm/llm/src/index.ts) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts)
 
-Source: [`packages/llm/llm-deepseek/src/index.ts:62`](../packages/llm/llm-deepseek/src/index.ts)
+Source: [`packages/llm/llm-deepseek/src/index.ts:69`](../packages/llm/llm-deepseek/src/index.ts)
 
 <a id="deepseek-aidsh-llm-pi-ai"></a>
 
@@ -2438,7 +2440,7 @@ Source: [`packages/shell/tool-bash-persistent/src/index.ts:405`](../packages/she
 
 ## `@deepseek-ai/dsh-tool-codex-image-proxy`
 
-Requires: `codexImageProxy` · `tools` · `systemPrompt`
+Requires: `attachments` · `codexImageProxy` · `fs` · `tools` · `systemPrompt`
 
 ```ts config-catalog
 /** Model-bound argument limits; queue and worker policy belong to the host seam. */
@@ -2450,7 +2452,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/image/tool-codex-image-proxy/src/index.ts:22`](../packages/image/tool-codex-image-proxy/src/index.ts)
+Source: [`packages/image/tool-codex-image-proxy/src/index.ts:85`](../packages/image/tool-codex-image-proxy/src/index.ts)
 
 <a id="deepseek-aidsh-tool-fs"></a>
 

@@ -17,6 +17,8 @@ export interface TokenUsageProjection {
   cacheWriteTokens: number
 }
 
+export type { DeepSeekCostProjection } from './deepseek-pricing.ts'
+
 /**
  * Approximate context occupancy for a status display.
  *
@@ -69,6 +71,8 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionMap {
     /** Provider-reported usage accumulated across the complete durable log. */
     tokenUsage: TokenUsageProjection
+    /** Current-price DeepSeek spend accumulated across the complete durable log. */
+    deepSeekCost: import('./deepseek-pricing.ts').DeepSeekCostProjection
     /** Newest request pressure paired with the newest known route capacity. */
     contextPressure: ContextPressureProjection
     /** Heuristic system/tools/message composition of the next request. */

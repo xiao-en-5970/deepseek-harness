@@ -134,12 +134,34 @@ describe('serializeMessages', () => {
     expect(wire).toEqual([{ role: 'user', content: 'see chart' }])
   })
 
-  it('rejects image blocks instead of silently flattening them away', () => {
-    expect(() => serializeMessages([createUserMessage({
+  it('serializes direct user images as ordered opaque attachment markers', () => {
+    const id = AttachmentId(`sha256:${'a'.repeat(64)}`)
+    expect(serializeMessages([createUserMessage({
+      content: [{
+        type: 'text', text: 'edit ',
+      }, {
+        type: 'image',
+        attachment: {
+          attachmentId: id,
+          mediaType: 'image/png', bytes: 68, width: 1, height: 1, name: 'source.png',
+        },
+      }, {
+        type: 'text', text: ' in watercolor',
+      }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])).toEqual([{
+      role: 'user',
+      content: `edit [Image attachment id=${JSON.stringify(String(id))} media_type="image/png" name="source.png"] in watercolor`,
+    }])
+  })
+
+  it('still rejects images outside direct user content', () => {
+    expect(() => serializeMessages([createMessage({
+      role: 'assistant',
       content: [{
         type: 'image',
         attachment: {
-          attachmentId: AttachmentId(`sha256:${'a'.repeat(64)}`),
+          attachmentId: AttachmentId(`sha256:${'b'.repeat(64)}`),
           mediaType: 'image/png', bytes: 68, width: 1, height: 1,
         },
       }],

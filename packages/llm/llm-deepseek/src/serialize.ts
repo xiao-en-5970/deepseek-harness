@@ -2,8 +2,9 @@
  * Serialize harness messages into DeepSeek chat completions. User text is joined; assistant text
  * becomes `content`, tool calls become `tool_calls`, and tool results become separate tool messages.
  * Assistant reasoning is replayed as `reasoning_content` only on tool-call turns, as required by
- * thinking-mode passback. Core image blocks are rejected explicitly because this wire route is text-only;
- * unknown declaration-merged block types retain the adapter's documented extension fallback.
+ * thinking-mode passback. Direct user image blocks become opaque attachment markers for a registered
+ * image-tool bridge; no bytes, Host paths, or internal URLs enter this text-only wire route. Images in
+ * every other role remain rejected.
  * @module dsh-llm-deepseek/serialize
  */
 
@@ -59,6 +60,26 @@ function flattenText(blocks: ContentBlock[]): string {
     .filter(block => block.type === 'text')
     .map(block => block.text)
     .join('')
+}
+
+/** Stable text marker that lets a model route a durable user attachment to a tool. */
+function imageMarker(block: Extract<ContentBlock, { type: 'image' }>): string {
+  const ref = block.attachment
+  const fields = [
+    `id=${JSON.stringify(String(ref.attachmentId))}`,
+    `media_type=${JSON.stringify(ref.mediaType)}`,
+  ]
+  if (ref.name !== undefined) fields.push(`name=${JSON.stringify(ref.name)}`)
+  return `[Image attachment ${fields.join(' ')}]`
+}
+
+/** Preserve direct user text/image order while omitting unrelated extension blocks. */
+function flattenUserContent(blocks: ContentBlock[]): string {
+  return blocks.map((block) => {
+    if (block.type === 'text') return block.text
+    if (block.type === 'image') return imageMarker(block)
+    return ''
+  }).join('')
 }
 
 /** Reject core image content before any text-flattening path can silently erase it. */
@@ -147,23 +168,25 @@ function serializeAssistant(message: Message): WireMessage {
 export function serializeMessages(messages: Message[]): WireMessage[] {
   const wire: WireMessage[] = []
   for (const message of messages) {
-    assertTextOnly(message.content)
     if (message.role === 'system') {
+      assertTextOnly(message.content)
       wire.push({ role: 'system', content: flattenText(message.content) })
       continue
     }
     if (message.role === 'assistant') {
+      assertTextOnly(message.content)
       wire.push(serializeAssistant(message))
       continue
     }
     // user role: tool results ride in user messages in the harness
     // vocabulary, but DeepSeek wants them as role:'tool' messages.
     const toolResults = message.content.filter(block => block.type === 'tool-result')
-    const text = flattenText(message.content)
+    const text = flattenUserContent(message.content)
     if (text.length > 0 || toolResults.length === 0) {
       wire.push({ role: 'user', content: text })
     }
     for (const result of toolResults) {
+      assertTextOnly(result.content)
       wire.push({
         role: 'tool',
         tool_call_id: result.toolCallId,
@@ -175,7 +198,14 @@ export function serializeMessages(messages: Message[]): WireMessage[] {
   return wire
 }
 
-/** Serialize image-capable history without putting attachment bytes into durable messages. */
+/**
+ * Serialize image-capable history without putting attachment bytes into durable messages.
+ * @param messages - durable harness conversation history.
+ * @param attachments - durable attachment storage.
+ * @param serializeImage - provider image preparation function.
+ * @param signal - optional request cancellation.
+ * @returns provider wire messages with resolved image content.
+ */
 export async function serializeMessagesWithImages(
   messages: readonly Message[],
   attachments: AttachmentStore,
@@ -256,7 +286,14 @@ export function serializeRequest(
   }
 }
 
-/** Build a request after resolving durable images for a vision-capable model. */
+/**
+ * Build a request after resolving durable images for a vision-capable model.
+ * @param options - harness request containing image references.
+ * @param attachments - durable attachment storage.
+ * @param serializeImage - provider image preparation function.
+ * @param defaults - adapter-level request defaults.
+ * @returns complete provider wire request.
+ */
 export async function serializeRequestWithImages(
   options: GenerateOptions,
   attachments: AttachmentStore,

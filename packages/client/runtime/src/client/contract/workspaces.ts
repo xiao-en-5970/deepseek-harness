@@ -8,7 +8,8 @@
  */
 import type {
   DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart,
-  SessionId, WorkspaceId, WorkspaceView,
+  FileUploadChunk, FileUploadSession, FileUploadStart, SessionId,
+  WorkspaceFileListing, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceListState } from '../workspaces/service.ts'
 import type { ObservableSnapshot } from './store.ts'
@@ -56,6 +57,20 @@ export interface IWorkspaces {
    * @returns the created directory's absolute path.
    */
   createDirectory(path: string, name: string): Promise<string>
+  /**
+   * List one current-Workspace file-tree level.
+   * @param path - fully qualified directory to list.
+   * @param signal - aborts a superseded Host scan.
+   * @returns the bounded direct-child listing.
+   */
+  listWorkspaceFiles(path: string, signal?: AbortSignal): Promise<WorkspaceFileListing>
+  /**
+   * Create one exclusive empty file in an existing directory.
+   * @param path - fully qualified existing parent directory.
+   * @param name - single non-blank path segment.
+   * @returns the created file's absolute path.
+   */
+  createFile(path: string, name: string): Promise<string>
   /** Begin one bounded browser-to-host directory upload. */
   beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession>
   /** Append one ordered chunk and return the next acknowledged byte offset. */
@@ -64,6 +79,29 @@ export interface IWorkspaces {
   completeDirectoryUpload(uploadId: string): Promise<string>
   /** Remove an incomplete directory upload; unknown ids are an idempotent no-op. */
   abortDirectoryUpload(uploadId: string): Promise<void>
+  /**
+   * Begin one bounded local-file upload.
+   * @param input - destination and exact decoded byte total.
+   * @returns the opaque upload identity, eventual path, and chunk bound.
+   */
+  beginFileUpload(input: FileUploadStart): Promise<FileUploadSession>
+  /**
+   * Append one ordered file-upload chunk.
+   * @param input - upload identity, exact offset, base64 bytes, and terminal marker.
+   * @returns the next acknowledged byte offset.
+   */
+  writeFileUpload(input: FileUploadChunk): Promise<number>
+  /**
+   * Publish one complete file upload.
+   * @param uploadId - opaque active upload identity.
+   * @returns the published file's absolute path.
+   */
+  completeFileUpload(uploadId: string): Promise<string>
+  /**
+   * Remove one incomplete file upload.
+   * @param uploadId - opaque active or already-retired upload identity.
+   */
+  abortFileUpload(uploadId: string): Promise<void>
   /**
    * Open a filesystem path with the Host operating system's default application.
    * @param path - absolute or host-resolvable path.

@@ -306,6 +306,12 @@ importers:
       '@deepseek-ai/dsh-workflow-worker-thread':
         specifier: workspace:^
         version: link:../../packages/workflow/workflow-worker-thread
+      '@linxin666/dsh-client-ui-skin-center':
+        specifier: 0.2.0
+        version: 0.2.0(react@18.3.1)
+      '@linxin666/dsh-skins':
+        specifier: 0.2.0
+        version: 0.2.0(react@18.3.1)
       commander:
         specifier: ^15.0.0
         version: 15.0.0
@@ -3050,6 +3056,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-conversation':
         specifier: workspace:^
         version: link:../ui-conversation
+      '@deepseek-ai/dsh-client-ui-layout':
+        specifier: workspace:^
+        version: link:../ui-layout
       '@deepseek-ai/dsh-client-ui-primitives':
         specifier: workspace:^
         version: link:../ui-primitives
@@ -10138,6 +10147,14 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@linxin666/dsh-client-ui-skin-center@0.2.0':
+    resolution: {integrity: sha512-cg29ovIhmiqVMNaJuXbGEBbQHv6Ka38Hxy0w/USA8tj/oy2jAXxqx4mhCfcK/p855i1/CyA2e6cXCUZ+YHLVnQ==}
+    peerDependencies:
+      react: ^18.2.0
+
+  '@linxin666/dsh-skins@0.2.0':
+    resolution: {integrity: sha512-OlZPKU6zF2jic0fjKFPt76VU85hMrLKam6/pH4wrv7QKZ7ZZ0LL/ks+CCpW3Ro43XYnquOiWzDxzYG/lAuY4Pw==}
+
   '@mermaid-js/mermaid-mindmap@9.3.0':
     resolution: {integrity: sha512-IhtYSVBBRYviH1Ehu8gk69pMDF8DSRqXBRDMWrEfHoaMruHeaP2DXA3PBnuwsMaCdPQhlUUcy/7DBLAEIXvCAw==}
 
@@ -11880,6 +11897,9 @@ packages:
   cose-base@2.2.0:
     resolution: {integrity: sha512-AzlgcsCbUMymkADOJtQm3wO9S3ltPfYOFD5033keQn9NJzIbtnZj+UdBJe7DYml/8TdbtHJW3j58SOnKhWY/5g==}
 
+  cosmokit@1.8.1:
+    resolution: {integrity: sha512-PDBv4l90xZKrUsZ0vtoycgZpO/j4iFsqJXrAxsyBDsnQRI7ZMJXIjgDJsKNjd5L8jnVnnlrDCdhkFbTncgCVjQ==}
+
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
@@ -13601,6 +13621,9 @@ packages:
 
   scheduler@0.23.2:
     resolution: {integrity: sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==}
+
+  schemastery@3.18.0:
+    resolution: {integrity: sha512-Jw2uxjoyyqc/yeurmChUEc/jbi8GsrdXV/KmqRUDZXJAXAmrJiPsz8vKa17l/VckyzljHZ9oGaul443CQiXxtA==}
 
   scslre@0.3.0:
     resolution: {integrity: sha512-3A6sD0WYP7+QrjbfNA2FN3FsOaGGFoekCVgTyypy53gPxhbkCIjtO6YWgdrfM+n/8sI8JeXZOIxsHjMTNxQ4nQ==}
@@ -15491,6 +15514,17 @@ snapshots:
   '@koromix/koffi-win32-x64@3.1.1':
     optional: true
 
+  '@linxin666/dsh-client-ui-skin-center@0.2.0(react@18.3.1)':
+    dependencies:
+      react: 18.3.1
+      schemastery: 3.18.0
+
+  '@linxin666/dsh-skins@0.2.0(react@18.3.1)':
+    dependencies:
+      '@linxin666/dsh-client-ui-skin-center': 0.2.0(react@18.3.1)
+    transitivePeerDependencies:
+      - react
+
   '@mermaid-js/mermaid-mindmap@9.3.0':
     dependencies:
       '@braintree/sanitize-url': 6.0.4
@@ -16989,6 +17023,8 @@ snapshots:
   cose-base@2.2.0:
     dependencies:
       layout-base: 2.0.1
+
+  cosmokit@1.8.1: {}
 
   cross-spawn@7.0.6:
     dependencies:
@@ -19118,6 +19154,11 @@ snapshots:
   scheduler@0.23.2:
     dependencies:
       loose-envify: 1.4.0
+
+  schemastery@3.18.0:
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      cosmokit: 1.8.1
 
   scslre@0.3.0:
     dependencies:

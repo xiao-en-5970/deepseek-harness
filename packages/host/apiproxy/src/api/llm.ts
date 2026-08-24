@@ -48,6 +48,12 @@ export interface LlmApi {
    */
   models(request: RpcRequest<{}>): Promise<RpcResponse<{ groups: ModelProviderGroup[]; failures: ModelCatalogFailure[] }>>
 
+  /** Read an active provider route's account balance using its host-side credential. */
+  balance(
+    request: RpcRequest<{ provider: string }>,
+    signal?: AbortSignal,
+  ): Promise<RpcResponse<{ balance?: LlmAccountBalanceView }>>
+
   /**
    * Interrogate a provider endpoint the configuration surface is still
    * drafting, and return the models it advertises for the user to adopt.
@@ -74,6 +80,18 @@ export interface LlmApi {
     }>,
     signal?: AbortSignal,
   ): Promise<RpcResponse<{ models: DiscoveredModelView[] }>>
+}
+
+/** Browser-safe account-balance view; credentials never cross this boundary. */
+export interface LlmAccountBalanceView {
+  provider: string
+  available: boolean
+  balances: Array<{
+    currency: string
+    totalBalance: string
+    grantedBalance: string
+    toppedUpBalance: string
+  }>
 }
 
 /** Wire view of one model an interrogated endpoint advertises. */

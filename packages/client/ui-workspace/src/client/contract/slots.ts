@@ -27,8 +27,10 @@ import type { HostObservable, PropsLocale, PropsRenderSlots, PropsRuntime, Props
 // runtime shares below.
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {
-  SessionId, SessionSearchResultItem, WorkspaceId, WorkspaceView,
+  FileUploadChunk, FileUploadSession, FileUploadStart, SessionId, SessionSearchResultItem,
+  WorkspaceFileListing, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { createWorkspaceViewStore } from '../stores.ts'
 
@@ -137,6 +139,24 @@ export type WorkspaceBrowserInjected = DirectoryPickingInjected & {
   createWorkspace: (input: { path: string }) => Promise<WorkspaceView>
 }
 
+/** Host actions consumed by the persistent right-side Workspace file explorer. */
+export type WorkspaceFilesInjected = {
+  /** List one bounded level of files and directories inside a current Workspace. */
+  listWorkspaceFiles: (path: string, signal?: AbortSignal) => Promise<WorkspaceFileListing>
+  /** Create one exclusive empty file under a visible Workspace directory. */
+  createFile: (path: string, name: string) => Promise<string>
+  /** Create one child directory under a visible Workspace directory. */
+  createDirectory: (path: string, name: string) => Promise<string>
+  /** Begin one bounded browser file upload into a visible Workspace directory. */
+  beginFileUpload: (input: FileUploadStart) => Promise<FileUploadSession>
+  /** Append one ordered base64 chunk to an active Workspace file upload. */
+  writeFileUpload: (input: FileUploadChunk) => Promise<number>
+  /** Publish an uploaded Workspace file after its declared bytes have landed. */
+  completeFileUpload: (uploadId: string) => Promise<string>
+  /** Abort one incomplete Workspace file upload. */
+  abortFileUpload: (uploadId: string) => Promise<void>
+}
+
 /** Full browser props: shell owner share + viewing store + injected actions + the locale seat. */
 export type WorkspaceBrowserProps =
   PropsRuntime<'sidebar.workspaces'>
@@ -144,6 +164,12 @@ export type WorkspaceBrowserProps =
   & PropsStore<ReturnType<typeof createWorkspaceViewStore>>
   & Omit<WorkspaceBrowserInjected, 'hooks'>
   & DirectoryPickingHooks
+  & PropsLocale<'workspace'>
+
+/** Full props for the persistent right-side Workspace file explorer. */
+export type WorkspaceFilesPanelProps =
+  PropsRuntime<'workspace.files'>
+  & WorkspaceFilesInjected
   & PropsLocale<'workspace'>
 
 /**

@@ -444,6 +444,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Host service owning the shared queue and the browser image route.',
     methods: [
       {
+        signature: 'readonly requestTimeoutMs: number',
+        description: 'Maximum time one generation request may wait for a worker result.',
+        parameters: [],
+      },
+      {
         signature: 'async generate(input: ImageGenerationRequest, signal: AbortSignal): Promise<ImageProxyResult>',
         description: 'Enqueue one bounded model request and wait for the authenticated worker\'s durable result.',
         parameters: [{ name: 'input', description: 'Complete visual prompt and bounded relevant context.' }, { name: 'signal', description: 'Caller cancellation propagated through durable cancellation markers.' }],
@@ -848,6 +853,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Discover models advertised by one registered provider. Catalog membership is advisory and never changes routing or request validation.',
         parameters: [{ name: 'provider', description: 'registered provider route to inspect.' }],
         returns: 'detached model metadata in adapter-preferred order.',
+      },
+      {
+        signature: 'async accountBalance(provider: string, signal?: AbortSignal): Promise<LlmAccountBalance | undefined>',
+        description: 'Read one registered route\'s account balance without exposing its credential.',
+        parameters: [{ name: 'provider', description: 'registered provider route to inspect.' }, { name: 'signal', description: 'optional cancellation for the provider request.' }],
+        returns: 'detached balance data, or undefined when the adapter does not expose balance lookup.',
       },
       {
         signature: 'async resolveModelInfo( provider: string, model: string, signal?: AbortSignal, ): Promise<LlmResolvedModelInfo>',
@@ -2944,7 +2955,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'DirectoryPickerBrowseCapability',
-    declaration: 'export interface DirectoryPickerBrowseCapability {\n    kind: \'browse\';\n    list(path?: string, signal?: AbortSignal): Promise<DirectoryListing>;\n    createDirectory(path: string, name: string): Promise<string>;\n    beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession>;\n    writeDirectoryUpload(input: DirectoryUploadChunk): Promise<DirectoryUploadProgress>;\n    completeDirectoryUpload(uploadId: string): Promise<string>;\n    abortDirectoryUpload(uploadId: string): Promise<void>;\n}',
+    declaration: 'export interface DirectoryPickerBrowseCapability {\n    kind: \'browse\';\n    list(path?: string, signal?: AbortSignal): Promise<DirectoryListing>;\n    createDirectory(path: string, name: string): Promise<string>;\n    listWorkspaceFiles(path: string, signal?: AbortSignal): Promise<WorkspaceFileListing>;\n    resolveWorkspaceDownload?(path: string, signal?: AbortSignal): Promise<WorkspaceDownloadTarget>;\n    createFile(path: string, name: string): Promise<string>;\n    beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession>;\n    writeDirectoryUpload(input: DirectoryUploadChunk): Promise<DirectoryUploadProgress>;\n    completeDirectoryUpload(uploadId: string): Promise<string>;\n    abortDirectoryUpload(uploadId: string): Promise<void>;\n    beginFileUpload(input: FileUploadStart): Promise<FileUploadSession>;\n    writeFileUpload(input: FileUploadChunk): Promise<DirectoryUploadProgress>;\n    completeFileUpload(uploadId: string): Promise<string>;\n    abortFileUpload(uploadId: string): Promise<void>;\n}',
   },
   {
     name: 'DirectoryPickerCapabilities',
@@ -3012,7 +3023,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'DownloadsApi',
-    declaration: 'export interface DownloadsApi {\n    sessionLog(request: {\n        sessionId: SessionId;\n        includeDescendants?: boolean;\n    }, signal: AbortSignal): Promise<Response>;\n}',
+    declaration: 'export interface DownloadsApi {\n    workspacePath?(request: {\n        path: string;\n    }, signal: AbortSignal): Promise<Response>;\n    sessionLog(request: {\n        sessionId: SessionId;\n        includeDescendants?: boolean;\n    }, signal: AbortSignal): Promise<Response>;\n}',
   },
   {
     name: 'DshEnvironment',
@@ -3160,7 +3171,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ImageGenerationRequest',
-    declaration: 'export interface ImageGenerationRequest {\n    prompt: string;\n    context: string;\n}',
+    declaration: 'export interface ImageGenerationRequest {\n    prompt: string;\n    context: string;\n    referenceImages?: readonly ReferenceImageInput[];\n}',
   },
   {
     name: 'ImageMediaType',
@@ -3287,8 +3298,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface KvUnitDescriptor {\n    readonly name: string;\n    readonly version: number;\n    readonly tables: readonly string[];\n    readonly hasGlobal: boolean;\n}',
   },
   {
+    name: 'LlmAccountBalance',
+    declaration: 'export interface LlmAccountBalance {\n    provider: string;\n    available: boolean;\n    balances: readonly LlmBalanceInfo[];\n}',
+  },
+  {
     name: 'LlmAdapter',
-    declaration: 'export abstract class LlmAdapter {\n    providerInfo(provider: string): LlmProviderInfo;\n    providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined;\n    listModels(_provider: string): Promise<readonly LlmModelInfo[]>;\n    resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    abstract stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+    declaration: 'export abstract class LlmAdapter {\n    providerInfo(provider: string): LlmProviderInfo;\n    providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined;\n    listModels(_provider: string): Promise<readonly LlmModelInfo[]>;\n    accountBalance(_provider: string, _signal?: AbortSignal): Promise<LlmAccountBalance | undefined>;\n    resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    abstract stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+  },
+  {
+    name: 'LlmBalanceInfo',
+    declaration: 'export interface LlmBalanceInfo {\n    currency: string;\n    totalBalance: string;\n    grantedBalance: string;\n    toppedUpBalance: string;\n}',
   },
   {
     name: 'LlmCallConfig',
@@ -3340,7 +3359,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmRuntime',
-    declaration: 'export class LlmRuntime extends Service {\n    constructor(ctx: Context);\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<LlmCallConfig>;\n    async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+    declaration: 'export class LlmRuntime extends Service {\n    constructor(ctx: Context);\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async accountBalance(provider: string, signal?: AbortSignal): Promise<LlmAccountBalance | undefined>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<LlmCallConfig>;\n    async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
   {
     name: 'LspHover',
@@ -3601,6 +3620,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'RedactedSecret',
     declaration: 'export interface RedactedSecret {\n    path: string[];\n    set: boolean;\n}',
+  },
+  {
+    name: 'ReferenceImageInput',
+    declaration: 'export interface ReferenceImageInput {\n    data: Uint8Array;\n    mimeType: ImageMimeType;\n    name?: string;\n}',
   },
   {
     name: 'RequestContext',
@@ -4669,6 +4692,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkflowStopReason',
     declaration: 'export type WorkflowStopReason = \'completed\' | \'cancelled\' | \'error\';',
+  },
+  {
+    name: 'WorkspaceDownloadTarget',
+    declaration: 'export interface WorkspaceDownloadTarget {\n    path: string;\n    name: string;\n    kind: \'directory\' | \'file\';\n}',
   },
 ]
 

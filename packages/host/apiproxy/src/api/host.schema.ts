@@ -3,7 +3,7 @@
  */
 
 import { z } from 'zod'
-import type { DirectoryEntry } from './host.ts'
+import type { DirectoryEntry, WorkspaceFileEntry } from './host.ts'
 import type { RequestPayload, ResponseValue } from './rpc-map.ts'
 import type { Wire } from './rpc.schema.ts'
 
@@ -55,7 +55,7 @@ export const hostCreateDirectoryRequestSchema = z.object({
   name: z.string(),
 }).refine(
   payload => payload.name.trim() !== '' && payload.name !== '.' && payload.name !== '..'
-    && !/[/\\]/.test(payload.name),
+    && !payload.name.includes('\0') && !/[/\\]/.test(payload.name),
   { message: 'host.createDirectory requires a single non-blank path segment name' },
 ) satisfies z.ZodType<Wire<RequestPayload<'host.createDirectory'>>>
 
@@ -63,6 +63,39 @@ export const hostCreateDirectoryRequestSchema = z.object({
 export const hostCreateDirectoryValueSchema = z.object({
   path: z.string(),
 }) satisfies z.ZodType<Wire<ResponseValue<'host.createDirectory'>>>
+
+/** File-tree row returned by host.listWorkspaceFiles. */
+export const workspaceFileEntrySchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  kind: z.enum(['directory', 'file']),
+  hidden: z.boolean(),
+}) satisfies z.ZodType<Wire<WorkspaceFileEntry>>
+
+/** host.listWorkspaceFiles request payload. */
+export const hostListWorkspaceFilesRequestSchema = z.object({
+  path: z.string().min(1),
+}) satisfies z.ZodType<Wire<RequestPayload<'host.listWorkspaceFiles'>>>
+
+/** host.listWorkspaceFiles response value. */
+export const hostListWorkspaceFilesValueSchema = z.object({
+  path: z.string(),
+  entries: z.array(workspaceFileEntrySchema),
+  truncated: z.boolean(),
+}) satisfies z.ZodType<Wire<ResponseValue<'host.listWorkspaceFiles'>>>
+
+/** host.createFile request payload. */
+export const hostCreateFileRequestSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+}).refine(
+  payload => payload.name.trim() !== '' && payload.name !== '.' && payload.name !== '..'
+    && !payload.name.includes('\0') && !/[/\\]/.test(payload.name),
+  { message: 'host.createFile requires a single non-blank path segment name' },
+) satisfies z.ZodType<Wire<RequestPayload<'host.createFile'>>>
+
+/** host.createFile response value. */
+export const hostCreateFileValueSchema = hostCreateDirectoryValueSchema satisfies z.ZodType<Wire<ResponseValue<'host.createFile'>>>
 
 /** host.beginDirectoryUpload request: one root plus manifest totals. */
 export const hostBeginDirectoryUploadRequestSchema = z.object({
@@ -107,6 +140,36 @@ export const hostCompleteDirectoryUploadValueSchema = z.object({ path: z.string(
 export const hostAbortDirectoryUploadRequestSchema = directoryUploadIdSchema satisfies z.ZodType<Wire<RequestPayload<'host.abortDirectoryUpload'>>>
 /** host.abortDirectoryUpload response: idempotent cleanup acknowledgement. */
 export const hostAbortDirectoryUploadValueSchema = z.object({ aborted: z.literal(true) }) satisfies z.ZodType<Wire<ResponseValue<'host.abortDirectoryUpload'>>>
+
+/** host.beginFileUpload request payload. */
+export const hostBeginFileUploadRequestSchema = z.object({
+  parentPath: z.string().min(1),
+  name: z.string().min(1),
+  totalBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+}) satisfies z.ZodType<Wire<RequestPayload<'host.beginFileUpload'>>>
+
+/** host.beginFileUpload response value. */
+export const hostBeginFileUploadValueSchema = hostBeginDirectoryUploadValueSchema satisfies z.ZodType<Wire<ResponseValue<'host.beginFileUpload'>>>
+
+/** host.writeFileUpload request payload. */
+export const hostWriteFileUploadRequestSchema = z.object({
+  uploadId: z.uuid(),
+  offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  data: canonicalBase64Schema,
+  done: z.boolean(),
+}) satisfies z.ZodType<Wire<RequestPayload<'host.writeFileUpload'>>>
+
+/** host.writeFileUpload response value. */
+export const hostWriteFileUploadValueSchema = hostWriteDirectoryUploadValueSchema satisfies z.ZodType<Wire<ResponseValue<'host.writeFileUpload'>>>
+
+/** host.completeFileUpload request payload. */
+export const hostCompleteFileUploadRequestSchema = directoryUploadIdSchema satisfies z.ZodType<Wire<RequestPayload<'host.completeFileUpload'>>>
+/** host.completeFileUpload response value. */
+export const hostCompleteFileUploadValueSchema = z.object({ path: z.string() }) satisfies z.ZodType<Wire<ResponseValue<'host.completeFileUpload'>>>
+/** host.abortFileUpload request payload. */
+export const hostAbortFileUploadRequestSchema = directoryUploadIdSchema satisfies z.ZodType<Wire<RequestPayload<'host.abortFileUpload'>>>
+/** host.abortFileUpload response value. */
+export const hostAbortFileUploadValueSchema = z.object({ aborted: z.literal(true) }) satisfies z.ZodType<Wire<ResponseValue<'host.abortFileUpload'>>>
 /** host.openPath request payload. */
 export const hostOpenPathRequestSchema = z.object({
   path: z.string().min(1),

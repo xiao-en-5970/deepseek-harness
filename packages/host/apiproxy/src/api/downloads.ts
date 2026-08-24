@@ -10,6 +10,12 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 /** Host-only download surfaces (no wire envelope; absent from IApiClient). */
 export interface DownloadsApi {
   /**
+   * Stream one browse-root-confined Workspace file or directory archive.
+   * The directory-picker provider resolves and authorizes the opaque Host
+   * path before the download carrier reads it.
+   */
+  workspacePath?(request: { path: string }, signal: AbortSignal): Promise<Response>
+  /**
    * Stream one session-log ZIP — the root artifact verbatim plus each subagent
    * descendant's — as an attachment response. The carrier's GET route answers
    * this directly; the browser never calls it.

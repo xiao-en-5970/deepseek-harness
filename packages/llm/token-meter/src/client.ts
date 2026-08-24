@@ -5,3 +5,9 @@
  */
 
 export type * from './projection.ts'
+export {
+  calculateDeepSeekRequestCost, deepSeekBillingPeriod, formatDeepSeekCost,
+} from './deepseek-pricing.ts'
+export type {
+  DeepSeekBillingPeriod, DeepSeekRequestCost, DeepSeekTokenPrices,
+} from './deepseek-pricing.ts'

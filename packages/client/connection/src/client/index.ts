@@ -17,6 +17,7 @@ export type {
   ApiProxy, SessionsApi, SessionSearchItem, SessionSummary, PromptContentPart, HostApi, EventsApi, MuxFrame, HostFrame,
   ApprovalResponsePayload, QuestionResponsePayload, HistoryEntry, ToolEventView,
   DirectoryEntry, DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart,
+  FileUploadChunk, FileUploadSession, FileUploadStart, WorkspaceFileEntry, WorkspaceFileListing,
   ToolCallView, ToolResultView, WorkspaceApi, WorkspaceId, WorkspaceView,
   SkillsApi, SkillEntry,
   ModelCatalogFailure, ModelCatalogModel, ModelProviderGroup, ModelReasoning,
@@ -28,7 +29,7 @@ export type {
   HostDescription, IApiClient, SessionId, SessionEvent, ContentBlock, StreamChunk,
   GoalsApi, GoalRef,
   SettingsApi, SettingsNamespaceView, SettingsPathOpView, SettingsSecretView,
-  CredentialsApi, CredentialView, ConfigurableProviderView, DiscoveredModelView, LlmApi,
+  CredentialsApi, CredentialView, ConfigurableProviderView, DiscoveredModelView, LlmAccountBalanceView, LlmApi,
 } from './api.ts'
 export {
   RpcId,

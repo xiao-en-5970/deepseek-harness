@@ -259,9 +259,11 @@ const TOOL_PACKAGES: ToolPackage[] = [
     pkg: '@deepseek-ai/dsh-tool-codex-image-proxy',
     dir: 'tool-codex-image-proxy',
     source: 'packages/image/tool-codex-image-proxy/src/index.ts',
-    requires: ['ctx.tools', 'ctx.systemPrompt', 'ctx.codexImageProxy'],
+    requires: ['ctx.tools', 'ctx.systemPrompt', 'ctx.codexImageProxy', 'ctx.fs', 'ctx.attachments'],
     writes: ['tool/call', 'durable image-generation queue request', 'tool/result'],
     async mount(ctx) {
+      await ctx.plugin(LocalFileSystem)
+      await ctx.plugin(CatalogAttachmentStore)
       ctx.provide('codexImageProxy', {
         requestTimeoutMs: 600_000,
         generate: () => Promise.reject(new Error('tool catalog does not execute image generation')),

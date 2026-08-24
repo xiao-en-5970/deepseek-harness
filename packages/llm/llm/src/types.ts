@@ -148,6 +148,21 @@ export interface LlmProviderInfo {
   name: string
 }
 
+/** One currency bucket returned by a provider's account-balance endpoint. */
+export interface LlmBalanceInfo {
+  currency: string
+  totalBalance: string
+  grantedBalance: string
+  toppedUpBalance: string
+}
+
+/** Provider account balance resolved with the host-owned credential. */
+export interface LlmAccountBalance {
+  provider: string
+  available: boolean
+  balances: readonly LlmBalanceInfo[]
+}
+
 /** Merge-extensible provider model modality vocabulary. */
 export interface ModelModalityMap {
   text: 'text'

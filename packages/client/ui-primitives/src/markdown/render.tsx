@@ -61,6 +61,14 @@ function remoteImageUrl(url: string): string | undefined {
   }
 }
 
+const CODEX_IMAGE_PROXY_URL =
+  /^\/api\/codex-image-proxy\/image\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+function safeImageUrl(url: string): string | undefined {
+  if (CODEX_IMAGE_PROXY_URL.test(url)) return url
+  return remoteImageUrl(sanitizeUrl(url))
+}
+
 /** Link/image reference targets collected from a document (first definition per identifier wins, as in CommonMark). */
 export interface ReferenceTargets {
   /** Link/image definitions keyed by upper-cased identifier. */
@@ -469,7 +477,7 @@ function inlineCodeHttpUrl(value: string): string | undefined {
 }
 
 function renderImage(url: string, alt: string, key: Key): ReactNode {
-  const imageSrc = remoteImageUrl(sanitizeUrl(normalizeUri(url)))
+  const imageSrc = safeImageUrl(normalizeUri(url))
   if (imageSrc === undefined) {
     return <span key={key} className={css.imageAlt}>{alt}</span>
   }

@@ -160,12 +160,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      */
     'conversation.input.dock': { kind: 'list'; scope: 'session'; owner: InputZone }
     /**
-     * The band under the composer card, inside the bar's width column — the
-     * seat for an ambient readout about the conversation (the shipped stats
-     * line lives here). Same {@link InputZone} owner share as the other
-     * regions. Anything the user must click belongs in the tool row instead
-     * (`conversation.input.left` / `.right`); anything needing its own line
-     * above the card belongs in `conversation.input.dock`.
+     * The conversation metadata band below the session header and above the
+     * work area. The key is retained for existing contributors, while the
+     * shipped stats entry uses the full-width wrapping presentation. Same
+     * {@link InputZone} owner share as the input regions. Anything the user
+     * must click belongs in the tool row (`conversation.input.left` /
+     * `.right`); composer-adjacent prose belongs in `conversation.input.dock`.
      */
     'conversation.composer.dock': { kind: 'list'; scope: 'session'; owner: InputZone }
     /**

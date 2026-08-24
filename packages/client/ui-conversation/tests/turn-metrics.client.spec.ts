@@ -11,12 +11,15 @@ interface StepSpec {
   step: number
   timing?: AssistantMessageNode['timing']
   usage?: unknown
+  provider?: string
+  model?: string
 }
 
-const assistant = ({ seq, turn, step, timing, usage }: StepSpec): AssistantMessageNode => ({
+const assistant = ({ seq, turn, step, timing, usage, provider, model }: StepSpec): AssistantMessageNode => ({
   kind: 'assistant', seq, time: seq * 1_000, turn, step, blocks: [{ kind: 'text', text: `t${seq}` }],
   ...(timing === undefined ? {} : { timing }),
   ...(usage === undefined ? {} : { usage }),
+  ...(provider === undefined || model === undefined ? {} : { provenance: { provider, model } }),
 })
 
 const user = (seq: number): UserMessageNode => ({
@@ -133,6 +136,29 @@ describe('deriveTurnMetrics', () => {
     const metrics = deriveTurnMetrics(nodes)
     expect(metrics.get(1)).toEqual({ ttftMs: 400, tokensPerSecond: 10 })
     expect(metrics.get(2)).toEqual({ ttftMs: 100, tokensPerSecond: 50 })
+  })
+
+  it('sums every priced model step in one answer without pricing unrelated providers', () => {
+    const nodes = [
+      assistant({
+        seq: 2, turn: 1, step: 1,
+        timing: { stepStartTime: Date.parse('2026-08-17T09:30:00+08:00'), firstTokenTime: null, completedTime: Date.parse('2026-08-17T09:30:00+08:00') },
+        usage: { inputTokens: 1_000_000, outputTokens: 0 },
+        provider: 'deepseek-official', model: 'deepseek-v4-flash',
+      }),
+      assistant({
+        seq: 3, turn: 1, step: 2,
+        timing: { stepStartTime: Date.parse('2026-08-17T12:30:00+08:00'), firstTokenTime: null, completedTime: Date.parse('2026-08-17T12:30:00+08:00') },
+        usage: { inputTokens: 0, outputTokens: 1_000_000 },
+        provider: 'deepseek-official', model: 'deepseek-v4-flash',
+      }),
+      assistant({
+        seq: 4, turn: 1, step: 3,
+        usage: { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+        provider: 'openai', model: 'gpt-test',
+      }),
+    ]
+    expect(deriveTurnMetrics(nodes).get(1)).toEqual({ costCny: 7.5 })
   })
 })
 

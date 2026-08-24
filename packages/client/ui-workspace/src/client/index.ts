@@ -12,15 +12,17 @@ import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
+import type { WorkspaceBrowserInjected, WorkspaceFilesInjected, WorkspacePickerInjected } from './contract/slots.ts'
 import { createWorkspaceViewStore } from './stores.ts'
 import { WorkspaceBrowser } from './WorkspaceBrowser.tsx'
 import { WorkspacePicker } from './WorkspacePicker.tsx'
+import { WorkspaceFilesPanel } from './WorkspaceFilesPanel.tsx'
 import { en, zh, type WorkspaceKey } from './locales.ts'
 
 export type {
   DirectoryFlowOwnerProps, DirectoryFlowSlotName, DirectoryPickingHooks, DirectoryPickingInjected,
-  WorkspaceBrowserInjected, WorkspaceBrowserProps, WorkspacePickerInjected, WorkspacePickerProps,
+  WorkspaceBrowserInjected, WorkspaceBrowserProps, WorkspaceFilesInjected, WorkspaceFilesPanelProps,
+  WorkspacePickerInjected, WorkspacePickerProps,
 } from './contract/slots.ts'
 export type { WorkspaceKey } from './locales.ts'
 
@@ -101,6 +103,15 @@ export function apply(ctx: ClientContext): void {
     createWorkspace: input => ctx.workspaces.create(input),
     hooks: { directoryFlow: browserFlowSource },
   })
+  const filesInjected = (): WorkspaceFilesInjected => ({
+    listWorkspaceFiles: (path, signal) => ctx.workspaces.listWorkspaceFiles(path, signal),
+    createFile: (path, name) => ctx.workspaces.createFile(path, name),
+    createDirectory: (path, name) => ctx.workspaces.createDirectory(path, name),
+    beginFileUpload: input => ctx.workspaces.beginFileUpload(input),
+    writeFileUpload: input => ctx.workspaces.writeFileUpload(input),
+    completeFileUpload: uploadId => ctx.workspaces.completeFileUpload(uploadId),
+    abortFileUpload: uploadId => ctx.workspaces.abortFileUpload(uploadId),
+  })
   const pickerInjected = (): WorkspacePickerInjected => ({
     createWorkspace: input => ctx.workspaces.create(input),
     hooks: { directoryFlow: pickerFlowSource },
@@ -125,5 +136,9 @@ export function apply(ctx: ClientContext): void {
       locale: NS,
     },
     WorkspacePicker,
+  ))
+  ctx.slots.inject('workspace.files', () => ctx.slots.register(
+    { name: 'workspace.files', inject: filesInjected, locale: NS },
+    WorkspaceFilesPanel,
   ))
 }

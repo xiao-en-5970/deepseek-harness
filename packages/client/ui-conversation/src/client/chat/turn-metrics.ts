@@ -1,6 +1,8 @@
 // Latency/throughput folds shared by the settled turn footer and StatsLine.
 
 import type { AssistantMessageNode, ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
+import type { TokenUsage } from '@deepseek-ai/dsh-llm/types'
+import { deepSeekRequestCny } from './deepseek-cost.ts'
 
 /** Latency and decode-throughput readings for one turn's footer. */
 export interface TurnMetrics {
@@ -8,6 +10,8 @@ export interface TurnMetrics {
   ttftMs?: number
   /** Decode throughput over steps carrying both timing and provider usage. */
   tokensPerSecond?: number
+  /** Token-priced DeepSeek spend across every completed model step in the turn. */
+  costCny?: number
 }
 
 /** One assistant step's derivable latency facts; null marks an unrecorded part. */
@@ -21,7 +25,10 @@ export interface StepReading {
 }
 
 interface UsageLike {
+  inputTokens?: number
   outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
 }
 
 type AssistantNode = AssistantMessageNode
@@ -30,6 +37,36 @@ function usageOutputTokens(usage: unknown): number | null {
   if (typeof usage !== 'object' || usage === null) return null
   const value = (usage as UsageLike).outputTokens
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function tokenUsage(usage: unknown): TokenUsage | undefined {
+  if (typeof usage !== 'object' || usage === null) return undefined
+  const candidate = usage as UsageLike
+  if (typeof candidate.inputTokens !== 'number' || !Number.isFinite(candidate.inputTokens) || candidate.inputTokens < 0
+    || typeof candidate.outputTokens !== 'number' || !Number.isFinite(candidate.outputTokens) || candidate.outputTokens < 0
+    || (candidate.cacheReadTokens !== undefined
+      && (!Number.isFinite(candidate.cacheReadTokens) || candidate.cacheReadTokens < 0))
+    || (candidate.cacheWriteTokens !== undefined
+      && (!Number.isFinite(candidate.cacheWriteTokens) || candidate.cacheWriteTokens < 0))) return undefined
+  return {
+    inputTokens: candidate.inputTokens,
+    outputTokens: candidate.outputTokens,
+    ...candidate.cacheReadTokens === undefined ? {} : { cacheReadTokens: candidate.cacheReadTokens },
+    ...candidate.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: candidate.cacheWriteTokens },
+  }
+}
+
+/** Price one finalized assistant step when it came from a current DeepSeek model. */
+function assistantStepCost(node: AssistantMessageNode): number | undefined {
+  const usage = tokenUsage(node.usage)
+  const route = node.provenance ?? node.requestConfig
+  if (usage === undefined || route === undefined) return undefined
+  return deepSeekRequestCny(
+    route.provider,
+    route.model,
+    node.timing?.stepStartTime ?? node.time,
+    usage,
+  )
 }
 
 /**
@@ -54,6 +91,8 @@ interface TurnFold {
   decodeMs: number
   outputTokens: number
   sampled: boolean
+  costCny: number
+  priced: boolean
 }
 
 /**
@@ -74,7 +113,10 @@ export function deriveTurnMetrics(nodes: readonly ConversationNode[]): Map<numbe
     const reading = assistantStepReading(node)
     let fold = folds.get(node.turn)
     if (fold === undefined) {
-      fold = { firstStep: node.step, firstStepTtftMs: reading.ttftMs, decodeMs: 0, outputTokens: 0, sampled: false }
+      fold = {
+        firstStep: node.step, firstStepTtftMs: reading.ttftMs,
+        decodeMs: 0, outputTokens: 0, sampled: false, costCny: 0, priced: false,
+      }
       folds.set(node.turn, fold)
     } else if (node.step < fold.firstStep) {
       fold.firstStep = node.step
@@ -85,13 +127,21 @@ export function deriveTurnMetrics(nodes: readonly ConversationNode[]): Map<numbe
       fold.outputTokens += reading.outputTokens
       fold.sampled = true
     }
+    const cost = assistantStepCost(node)
+    if (cost !== undefined) {
+      fold.costCny += cost
+      fold.priced = true
+    }
   }
   const metrics = new Map<number, TurnMetrics>()
   for (const [turn, fold] of folds) {
     const entry: TurnMetrics = {}
     if (fold.firstStepTtftMs !== null) entry.ttftMs = fold.firstStepTtftMs
     if (fold.sampled && fold.decodeMs > 0) entry.tokensPerSecond = fold.outputTokens / (fold.decodeMs / 1000)
-    if (entry.ttftMs !== undefined || entry.tokensPerSecond !== undefined) metrics.set(turn, entry)
+    if (fold.priced) entry.costCny = fold.costCny
+    if (entry.ttftMs !== undefined || entry.tokensPerSecond !== undefined || entry.costCny !== undefined) {
+      metrics.set(turn, entry)
+    }
   }
   return metrics
 }

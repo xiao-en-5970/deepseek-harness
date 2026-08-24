@@ -95,6 +95,13 @@ export class FakeApiClient implements IApiClient {
 
   onCreateDirectory: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
     () => Promise.resolve(ok({ path: '/home/fake/new' }))
+  onListWorkspaceFiles: (payload: unknown) => Promise<RpcResponse<{
+    path: string
+    entries: { name: string; path: string; kind: 'directory' | 'file'; hidden: boolean }[]
+    truncated: boolean
+  }>> = () => Promise.resolve(ok({ path: '/home/fake', entries: [], truncated: false }))
+  onCreateFile: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
+    () => Promise.resolve(ok({ path: '/home/fake/new.txt' }))
   onBeginDirectoryUpload: (payload: unknown) => Promise<RpcResponse<{ uploadId: string; path: string; maxChunkBytes: number }>> =
     () => Promise.resolve(ok({ uploadId: '00000000-0000-4000-8000-000000000001', path: '/home/fake/upload', maxChunkBytes: 1024 }))
   onWriteDirectoryUpload: (payload: unknown) => Promise<RpcResponse<{ offset: number }>> =
@@ -102,6 +109,14 @@ export class FakeApiClient implements IApiClient {
   onCompleteDirectoryUpload: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
     () => Promise.resolve(ok({ path: '/home/fake/upload' }))
   onAbortDirectoryUpload: (payload: unknown) => Promise<RpcResponse<{ aborted: true }>> =
+    () => Promise.resolve(ok({ aborted: true as const }))
+  onBeginFileUpload: (payload: unknown) => Promise<RpcResponse<{ uploadId: string; path: string; maxChunkBytes: number }>> =
+    () => Promise.resolve(ok({ uploadId: '00000000-0000-4000-8000-000000000002', path: '/home/fake/upload.txt', maxChunkBytes: 1024 }))
+  onWriteFileUpload: (payload: unknown) => Promise<RpcResponse<{ offset: number }>> =
+    payload => Promise.resolve(ok({ offset: (payload as { offset: number }).offset }))
+  onCompleteFileUpload: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
+    () => Promise.resolve(ok({ path: '/home/fake/upload.txt' }))
+  onAbortFileUpload: (payload: unknown) => Promise<RpcResponse<{ aborted: true }>> =
     () => Promise.resolve(ok({ aborted: true as const }))
 
   private readonly muxConns: StreamConn<MuxFrame>[] = []
@@ -153,10 +168,16 @@ export class FakeApiClient implements IApiClient {
     pickDirectory: payload => this.record('host.pickDirectory', payload, this.onPickDirectory(payload)),
     listDirectory: payload => this.record('host.listDirectory', payload, this.onListDirectory(payload)),
     createDirectory: payload => this.record('host.createDirectory', payload, this.onCreateDirectory(payload)),
+    listWorkspaceFiles: payload => this.record('host.listWorkspaceFiles', payload, this.onListWorkspaceFiles(payload)),
+    createFile: payload => this.record('host.createFile', payload, this.onCreateFile(payload)),
     beginDirectoryUpload: payload => this.record('host.beginDirectoryUpload', payload, this.onBeginDirectoryUpload(payload)),
     writeDirectoryUpload: payload => this.record('host.writeDirectoryUpload', payload, this.onWriteDirectoryUpload(payload)),
     completeDirectoryUpload: payload => this.record('host.completeDirectoryUpload', payload, this.onCompleteDirectoryUpload(payload)),
     abortDirectoryUpload: payload => this.record('host.abortDirectoryUpload', payload, this.onAbortDirectoryUpload(payload)),
+    beginFileUpload: payload => this.record('host.beginFileUpload', payload, this.onBeginFileUpload(payload)),
+    writeFileUpload: payload => this.record('host.writeFileUpload', payload, this.onWriteFileUpload(payload)),
+    completeFileUpload: payload => this.record('host.completeFileUpload', payload, this.onCompleteFileUpload(payload)),
+    abortFileUpload: payload => this.record('host.abortFileUpload', payload, this.onAbortFileUpload(payload)),
     openPath: payload => this.record('host.openPath', payload, this.onOpenPath(payload)),
   }
 
@@ -233,6 +254,7 @@ export class FakeApiClient implements IApiClient {
   readonly llm: IApiClient['llm'] = {
     providers: payload => this.record('llm.providers', payload, Promise.resolve(ok({ providers: [] }))),
     models: payload => this.record('llm.models', payload, Promise.resolve(ok({ groups: [], failures: [] }))),
+    balance: payload => this.record('llm.balance', payload, Promise.resolve(ok({}))),
     discoverModels: payload => this.record('llm.discoverModels', payload, Promise.resolve(ok({ models: [] }))),
   }
 

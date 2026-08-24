@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { unzipSync } from 'fflate'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentFactory } from '@deepseek-ai/dsh-agent'
@@ -29,6 +30,11 @@ function expectOk<T>(response: RpcResponse<T>): T {
   expect(response.result.ok).toBe(true)
   if (!response.result.ok) throw new Error('unreachable')
   return response.result.value
+}
+
+function workspaceDownload(api: ReturnType<typeof createApiProxy>, path: string, signal: AbortSignal): Promise<Response> {
+  if (api.downloads.workspacePath === undefined) throw new Error('Workspace download implementation is missing')
+  return api.downloads.workspacePath({ path }, signal)
 }
 
 async function nextHostFrame(
@@ -177,6 +183,12 @@ const BROWSE_STUB: DirectoryPickerCapability = {
     if (name === 'unwritable') throw new Error('disk detached')
     return `${path}/${name}`
   },
+  listWorkspaceFiles: async path => ({
+    path,
+    entries: [{ name: 'a.txt', path: `${path}/a.txt`, kind: 'file', hidden: false }],
+    truncated: false,
+  }),
+  createFile: async (path, name) => `${path}/${name}`,
   beginDirectoryUpload: async input => ({
     uploadId: '00000000-0000-4000-8000-000000000001',
     path: `${input.parentPath}/${input.name}`,
@@ -185,6 +197,14 @@ const BROWSE_STUB: DirectoryPickerCapability = {
   writeDirectoryUpload: async input => ({ offset: input.offset + Buffer.from(input.data, 'base64').byteLength }),
   completeDirectoryUpload: async () => '/home/user/uploaded',
   abortDirectoryUpload: async () => {},
+  beginFileUpload: async input => ({
+    uploadId: '00000000-0000-4000-8000-000000000002',
+    path: `${input.parentPath}/${input.name}`,
+    maxChunkBytes: 1024,
+  }),
+  writeFileUpload: async input => ({ offset: input.offset + Buffer.from(input.data, 'base64').byteLength }),
+  completeFileUpload: async () => '/home/user/uploaded.txt',
+  abortFileUpload: async () => {},
 }
 
 describe('host.listDirectory / host.createDirectory', () => {
@@ -213,6 +233,38 @@ describe('host.listDirectory / host.createDirectory', () => {
     }))).result).toEqual({ ok: true, value: { aborted: true } })
   })
 
+  it('serves current-Workspace file listing, creation, and bounded file upload', async () => {
+    const { api } = await harness(undefined, BROWSE_STUB)
+    expect((await api.host.listWorkspaceFiles(
+      request({ path: '/home/user' }), new AbortController().signal,
+    )).result).toEqual({
+      ok: true,
+      value: {
+        path: '/home/user',
+        entries: [{ name: 'a.txt', path: '/home/user/a.txt', kind: 'file', hidden: false }],
+        truncated: false,
+      },
+    })
+    expect((await api.host.createFile(request({ path: '/home/user', name: 'new.txt' }))).result)
+      .toEqual({ ok: true, value: { path: '/home/user/new.txt' } })
+    const begun = await api.host.beginFileUpload(request({
+      parentPath: '/home/user', name: 'uploaded.txt', totalBytes: 2,
+    }))
+    expect(begun.result).toMatchObject({
+      ok: true,
+      value: { uploadId: '00000000-0000-4000-8000-000000000002', path: '/home/user/uploaded.txt' },
+    })
+    expect((await api.host.writeFileUpload(request({
+      uploadId: '00000000-0000-4000-8000-000000000002', offset: 0, data: 'aGk=', done: true,
+    }))).result).toEqual({ ok: true, value: { offset: 2 } })
+    expect((await api.host.completeFileUpload(request({
+      uploadId: '00000000-0000-4000-8000-000000000002',
+    }))).result).toEqual({ ok: true, value: { path: '/home/user/uploaded.txt' } })
+    expect((await api.host.abortFileUpload(request({
+      uploadId: '00000000-0000-4000-8000-000000000002',
+    }))).result).toEqual({ ok: true, value: { aborted: true } })
+  })
+
   it('maps typed picker failures onto the wire error codes and folds unknown throws to internal', async () => {
     const { api } = await harness(undefined, BROWSE_STUB)
     expect((await api.host.listDirectory(request({ path: '/denied' }), new AbortController().signal)).result).toMatchObject({
@@ -228,17 +280,11 @@ describe('host.listDirectory / host.createDirectory', () => {
 
   it('reports an aborted listing as cancelled, like the other signal-following RPCs', async () => {
     const { api } = await harness(undefined, {
+      ...BROWSE_STUB,
       kind: 'browse',
       list: (_path, signal) => new Promise((_resolve, reject) => {
         signal?.addEventListener('abort', () => { reject(new Error('scan aborted')) }, { once: true })
       }),
-      createDirectory: async () => '/never',
-      beginDirectoryUpload: async () => ({
-        uploadId: '00000000-0000-4000-8000-000000000001', path: '/never', maxChunkBytes: 1,
-      }),
-      writeDirectoryUpload: async () => ({ offset: 0 }),
-      completeDirectoryUpload: async () => '/never',
-      abortDirectoryUpload: async () => {},
     })
     const abort = new AbortController()
     const pending = api.host.listDirectory(request({}), abort.signal)
@@ -257,6 +303,11 @@ describe('host.listDirectory / host.createDirectory', () => {
     expect((await api.host.beginDirectoryUpload(request({
       parentPath: '/x', name: 'y', fileCount: 1, totalBytes: 0,
     }))).result).toMatchObject({ ok: false, error: { code: 'directory-picker-unavailable' } })
+    expect((await api.host.listWorkspaceFiles(
+      request({ path: '/x' }), new AbortController().signal,
+    )).result).toMatchObject({ ok: false, error: { code: 'directory-picker-unavailable' } })
+    expect((await api.host.createFile(request({ path: '/x', name: 'y.txt' }))).result)
+      .toMatchObject({ ok: false, error: { code: 'directory-picker-unavailable' } })
   })
 })
 
@@ -288,6 +339,53 @@ describe('host.openPath', () => {
     const pending = api.host.openPath(request({ path: '/tmp/a.txt' }), abort.signal)
     abort.abort()
     expect((await pending).result).toMatchObject({ ok: false, error: { code: 'cancelled' } })
+  })
+})
+
+describe('Workspace downloads', () => {
+  it('streams files verbatim and directories as relative, rooted ZIP trees', async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-download-')))
+    const file = join(root, 'note.txt')
+    const directory = stageDir(root, 'bundle')
+    mkdirSync(join(directory, '.hidden'))
+    writeFileSync(file, 'hello download')
+    writeFileSync(join(directory, 'a.txt'), 'A')
+    writeFileSync(join(directory, '.hidden', 'b.txt'), 'B')
+    writeFileSync(join(root, 'outside.txt'), 'must not enter archive')
+    symlinkSync(join(root, 'outside.txt'), join(directory, 'escape.txt'))
+    const picker: DirectoryPickerCapability = {
+      ...BROWSE_STUB,
+      kind: 'browse',
+      resolveWorkspaceDownload: async path => ({
+        path,
+        name: path === directory ? 'bundle' : 'note.txt',
+        kind: path === directory ? 'directory' : 'file',
+      }),
+    }
+    const { api } = await harness(root, picker)
+    const signal = new AbortController().signal
+
+    const direct = await workspaceDownload(api, file, signal)
+    expect(direct.status).toBe(200)
+    expect(direct.headers.get('content-disposition')).toContain('note.txt')
+    expect(await direct.text()).toBe('hello download')
+
+    const archived = await workspaceDownload(api, directory, signal)
+    expect(archived.status).toBe(200)
+    expect(archived.headers.get('content-type')).toBe('application/zip')
+    const entries = unzipSync(new Uint8Array(await archived.arrayBuffer()))
+    expect(Buffer.from(entries['bundle/a.txt'] ?? []).toString()).toBe('A')
+    expect(Buffer.from(entries['bundle/.hidden/b.txt'] ?? []).toString()).toBe('B')
+    expect(entries['bundle/escape.txt']).toBeUndefined()
+    expect(Object.values(entries).some(data => Buffer.from(data).toString().includes('must not enter archive'))).toBe(false)
+    expect(Object.keys(entries).some(path => path.includes(root))).toBe(false)
+  })
+
+  it('does not invent a download surface for a native or legacy provider', async () => {
+    const native = await harness()
+    expect((await workspaceDownload(native.api, '/tmp/a', new AbortController().signal)).status).toBe(501)
+    const legacy = await harness(undefined, BROWSE_STUB)
+    expect((await workspaceDownload(legacy.api, '/home/user/a', new AbortController().signal)).status).toBe(501)
   })
 })
 

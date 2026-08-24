@@ -1,5 +1,6 @@
 /** Registers the conversation components, shared store, and service callbacks. */
 import type { Context } from '@deepseek-ai/cordis'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { resolveSlotLabel, type BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   resolveWorkspacePath, type ISessions, type SessionId,
@@ -425,8 +426,39 @@ export function apply(ctx: Context): void {
     },
   }, ChatView)
 
-  // Session stats stick with the composer (composer.dock = stats-line family).
-  slots.register({ name: 'conversation.composer.dock', id: 'stats', order: 0, locale: NS }, StatsLine)
+  // The legacy composer.dock key now renders as the full-width metadata band
+  // below the session header, preserving existing contributor registrations.
+  const loadDeepSeekBillingSummary = async (sessionId: SessionId): Promise<{
+    balance?: string
+    workspaceCny: number
+    identifierCny: number
+  }> => {
+    const sessionRows = sessions.list.getSnapshot().byId
+    const sessionCost = (id: SessionId): number => sessionRows[id]?.projectionValues?.deepSeekCost?.cny ?? 0
+    const identifierCny = Object.values(sessionRows).reduce((total, row) => (
+      total + (row.projectionValues?.deepSeekCost?.cny ?? 0)
+    ), 0)
+    const workspace = workspaces.list.getSnapshot().items.find(item => item.sessionIds.includes(sessionId))
+    const workspaceCny = workspace?.sessionIds.reduce((total, id) => total + sessionCost(id), 0) ?? sessionCost(sessionId)
+    const connection = ctx.get('connection') as ConnectionHandle
+    const providers = await connection.api.llm.providers({})
+    if (!providers.result.ok) return { workspaceCny, identifierCny }
+    const provider = providers.result.value.providers.find(entry => entry.active && entry.provider.startsWith('deepseek'))
+    if (provider === undefined) return { workspaceCny, identifierCny }
+    const response = await connection.api.llm.balance({ provider: provider.provider })
+    if (!response.result.ok) return { workspaceCny, identifierCny }
+    const bucket = response.result.value.balance?.balances.find(item => item.currency === 'CNY')
+      ?? response.result.value.balance?.balances[0]
+    return {
+      workspaceCny,
+      identifierCny,
+      ...bucket === undefined ? {} : { balance: `${bucket.currency} ${bucket.totalBalance}` },
+    }
+  }
+  slots.register({
+    name: 'conversation.composer.dock', id: 'stats', order: 0, locale: NS,
+    inject: sessionId => ({ loadBillingSummary: () => loadDeepSeekBillingSummary(sessionId) }),
+  }, StatsLine)
 
   // Class-plugin mount (packages/AGENTS.md service form): the service
   // registers itself as `conversation` and lives on its own child fiber.

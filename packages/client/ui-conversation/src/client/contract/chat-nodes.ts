@@ -61,6 +61,8 @@ export interface TurnTailChatData {
   readonly branchUnavailable: boolean
   readonly ttftMs?: number
   readonly tokensPerSecond?: number
+  /** Token-priced DeepSeek spend across every model step in this turn. */
+  readonly costCny?: number
 }
 
 /**

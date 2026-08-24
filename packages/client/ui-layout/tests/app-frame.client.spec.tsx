@@ -11,7 +11,7 @@
  * resizes are driven through the ResizeObserver stub.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { AppFrame } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
 import type { AppFrameProps } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
@@ -285,6 +285,20 @@ describe('AppFrame', () => {
 })
 
 describe('AppFrame — narrow-viewport auto-collapse', () => {
+  it('uses full-screen chat and opens the existing sidebar as a phone menu', () => {
+    frameWidth = 390
+    const { frame, getByRole, slotCalls } = mountFrame()
+    expect(frame.dataset.mobileScreen).toBe('chat')
+    expect(tracks(frame)).toEqual([0, 0])
+    expect(frame.querySelectorAll('[class*="handle"]')).toHaveLength(0)
+
+    fireEvent.click(getByRole('button', { name: '打开菜单' }))
+
+    expect(frame.dataset.mobileScreen).toBe('menu')
+    expect(slotCalls.filter(c => c.key === 'sidebar').at(-1)!.props)
+      .toEqual({ collapsed: false, width: 390 })
+  })
+
   it('mounts collapsed below the breakpoint with no sidebar handle', () => {
     frameWidth = 980
     const { frame, slotCalls } = mountFrame()

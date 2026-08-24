@@ -256,6 +256,29 @@ describe('MarkdownText', () => {
     }
   })
 
+  it('renders only the strict same-origin Codex image proxy route', () => {
+    const requestId = '123e4567-e89b-42d3-a456-426614174000'
+    const markdown = [
+      `![generated](/api/codex-image-proxy/image/${requestId})`,
+      '![settings](/settings)',
+      '![protocol relative](//example.com/image.png)',
+      '![wrong version](/api/codex-image-proxy/image/123e4567-e89b-12d3-a456-426614174000)',
+      `![query suffix](/api/codex-image-proxy/image/${requestId}?download=1)`,
+    ].join('\n\n')
+    const { container } = render(<MarkdownText text={markdown} />)
+    const images = [...container.querySelectorAll('img')]
+
+    expect(images).toHaveLength(1)
+    expect(images[0]?.getAttribute('src')).toBe(`/api/codex-image-proxy/image/${requestId}`)
+    expect(images[0]?.getAttribute('loading')).toBe('lazy')
+    expect(images[0]?.getAttribute('decoding')).toBe('async')
+    expect(images[0]?.getAttribute('referrerpolicy')).toBe('no-referrer')
+    expect(screen.getByText('settings')).toBeTruthy()
+    expect(screen.getByText('protocol relative')).toBeTruthy()
+    expect(screen.getByText('wrong version')).toBeTruthy()
+    expect(screen.getByText('query suffix')).toBeTruthy()
+  })
+
   it('neutralizes raw HTML, unsafe or relative links, and unsupported images', () => {
     const markdown = [
       '<script>globalThis.compromised = true</script>',

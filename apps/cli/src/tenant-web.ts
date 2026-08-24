@@ -9,11 +9,11 @@
 
 import { createHash } from 'node:crypto'
 import { spawn, type ChildProcessByStdio } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
 import type { Duplex, Readable } from 'node:stream'
-import { isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
@@ -28,12 +28,18 @@ export const TENANT_CURRENT_PATH = `${TENANT_SELECTOR_PATH}/current`
 const DEFAULT_COOKIE_VALUE = 'default'
 const MAX_IDENTIFIER_CHARACTERS = 64
 const MAX_FORM_BYTES = 8 * 1024
+const DEFAULT_SKIN_MARKER_FILENAME = 'default-skin-initialized-v1.json'
+const DEFAULT_SKIN_MANIFEST_ATTEMPTS = 40
+const DEFAULT_SKIN_MANIFEST_INTERVAL_MS = 250
+const LOOPBACK_RESPONSE_LIMIT_BYTES = 2 * 1024 * 1024
 
 /** Parsed launcher settings for {@link runTenantWeb}. */
 export interface TenantWebOptions {
   host: '127.0.0.1'
   port: number
   tenantRoot?: string
+  /** One-time initial skin for each identifier; later profile choices win. */
+  defaultSkin?: string
   maxActiveTenants: number
   idleTimeoutMs: number
   startTimeoutMs: number
@@ -50,7 +56,7 @@ export type TenantSelectionState =
   | { readonly selected: false }
   | { readonly selected: true; readonly identifier: TenantIdentifier }
 
-interface TenantLayout {
+export interface TenantLayout {
   readonly key: string
   readonly cwd: string
   readonly dshHome?: string
@@ -125,6 +131,31 @@ export function resolveTenantLayout(identifier: TenantIdentifier, tenantRoot: st
   return { key, cwd: home, home, dshHome, patch: join(root, 'tenant.patch.yml') }
 }
 
+/** Resolve the parent-owned image queue before tenant HOME/DSH_HOME isolation is applied. */
+export function resolveTenantImageQueueRoot(parentDshHome: string, configured?: string): string {
+  if (configured !== undefined && configured.trim() !== '') return configured
+  return resolve(parentDshHome, 'codex-image-proxy-shared', 'v1')
+}
+
+/** Build one child environment while preserving the parent-owned image queue and tenant isolation key. */
+export function resolveTenantChildEnvironment(
+  layout: Pick<TenantLayout, 'key' | 'home' | 'dshHome'>,
+  sharedImageQueueRoot: string,
+  baseEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    DSH_CODEX_IMAGE_QUEUE_ROOT: sharedImageQueueRoot,
+    DSH_TENANT_KEY: layout.key,
+  }
+  if (layout.home !== undefined && layout.dshHome !== undefined) {
+    env.HOME = layout.home
+    env.USERPROFILE = layout.home
+    env.DSH_HOME = layout.dshHome
+  }
+  return env
+}
+
 /** Make Node preload/loader operands independent of a named tenant's private cwd. */
 export function portableChildExecArgv(execArgv: readonly string[], originalCwd: string): string[] {
   const portableSpecifier = (specifier: string): string => {
@@ -155,6 +186,113 @@ export function portableChildExecArgv(execArgv: readonly string[], originalCwd: 
 /** Preload that switches to the tenant cwd after source loaders initialize at the installation root. */
 export function tenantChdirImport(cwd: string): string {
   return `data:text/javascript,${encodeURIComponent(`process.chdir(${JSON.stringify(cwd)})`)}`
+}
+
+/** Marker recording that one identifier has already received its initial skin. */
+export function defaultSkinMarkerPath(dshHome: string): string {
+  return join(dshHome, 'tenant-web', DEFAULT_SKIN_MARKER_FILENAME)
+}
+
+interface LoopbackResponse {
+  readonly status: number
+  readonly body: string
+}
+
+/** Bounded private HTTP request to one already-ready tenant child. */
+function requestTenantChild(port: number, path: string, method: 'GET' | 'POST', body?: string): Promise<LoopbackResponse> {
+  return new Promise<LoopbackResponse>((resolveResponse, rejectResponse) => {
+    const request = httpRequest({
+      host: '127.0.0.1',
+      port,
+      path,
+      method,
+      headers: body === undefined
+        ? { connection: 'close' }
+        : {
+          connection: 'close',
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        },
+    }, (response) => {
+      const chunks: Buffer[] = []
+      let size = 0
+      response.on('data', (chunk: Buffer | string) => {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        size += bytes.byteLength
+        if (size > LOOPBACK_RESPONSE_LIMIT_BYTES) {
+          response.destroy(new Error(`tenant child response exceeded ${String(LOOPBACK_RESPONSE_LIMIT_BYTES)} bytes`))
+          return
+        }
+        chunks.push(bytes)
+      })
+      response.once('end', () => {
+        resolveResponse({ status: response.statusCode ?? 502, body: Buffer.concat(chunks).toString('utf8') })
+      })
+      response.once('error', rejectResponse)
+    })
+    request.setTimeout(5_000, () => {
+      request.destroy(new Error(`tenant child ${method} ${path} timed out`))
+    })
+    request.once('error', rejectResponse)
+    if (body !== undefined) request.write(body)
+    request.end()
+  })
+}
+
+/** Whether the selected skin already appears in the Web boot manifest. */
+function manifestHasSkin(documentHtml: string, skin: string): boolean {
+  return documentHtml.includes(`/plugins/@linxin666/dsh-client-ui-skin-${skin}/client.js`)
+}
+
+/** Apply one identifier's configured initial skin exactly once. */
+export async function ensureDefaultTenantSkin(
+  dshHome: string,
+  port: number,
+  skin: string,
+  options: { manifestAttempts?: number; manifestIntervalMs?: number } = {},
+): Promise<boolean> {
+  const marker = defaultSkinMarkerPath(dshHome)
+  try {
+    await stat(marker)
+    return false
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+
+  const applied = await requestTenantChild(port, '/api/skin-center/apply', 'POST', JSON.stringify({ skin }))
+  let payload: { ok?: unknown; active?: unknown; error?: unknown }
+  try {
+    payload = JSON.parse(applied.body) as typeof payload
+  } catch {
+    throw new Error(`default skin ${JSON.stringify(skin)} returned non-JSON HTTP ${String(applied.status)}`)
+  }
+  if (applied.status !== 200 || payload.ok !== true || payload.active !== skin) {
+    const failureDetail = payload.error === undefined
+      ? applied.body
+      : JSON.stringify(payload.error)
+    throw new Error(
+      `default skin ${JSON.stringify(skin)} failed with HTTP ${String(applied.status)}: ${failureDetail}`,
+    )
+  }
+
+  const attempts = options.manifestAttempts ?? DEFAULT_SKIN_MANIFEST_ATTEMPTS
+  const intervalMs = options.manifestIntervalMs ?? DEFAULT_SKIN_MANIFEST_INTERVAL_MS
+  let manifestReady = false
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const document = await requestTenantChild(port, '/', 'GET')
+    if (document.status === 200 && manifestHasSkin(document.body, skin)) {
+      manifestReady = true
+      break
+    }
+    if (attempt + 1 < attempts) await new Promise<void>((resolveWait) => { setTimeout(resolveWait, intervalMs) })
+  }
+  if (!manifestReady) {
+    throw new Error(`default skin ${JSON.stringify(skin)} was applied but did not enter the Web boot manifest`)
+  }
+
+  await mkdir(dirname(marker), { recursive: true, mode: 0o700 })
+  await writeFile(marker, JSON.stringify({ version: 1, skin }) + '\n', { mode: 0o600 })
+  return true
 }
 
 /** Escape a dynamic diagnostic inserted into the selector document. */
@@ -288,14 +426,19 @@ class TenantManager {
   private operationTail: Promise<void> = Promise.resolve()
   private readonly originalCwd = process.cwd()
   private readonly tenantRoot: string
+  private readonly defaultDshHome: string
   private readonly defaultCredentialsPath: string
+  private readonly sharedImageQueueRoot: string
   private readonly patches: string[]
   private readonly childExecArgv: string[]
   private readonly sweep: NodeJS.Timeout
 
   constructor(private readonly options: TenantWebOptions) {
-    this.tenantRoot = resolve(options.tenantRoot ?? join(resolveDshHome(), 'tenant-web'))
-    this.defaultCredentialsPath = join(resolveDshHome(), '.credentials.yaml')
+    const parentDshHome = resolveDshHome()
+    this.tenantRoot = resolve(options.tenantRoot ?? join(parentDshHome, 'tenant-web'))
+    this.defaultDshHome = parentDshHome
+    this.defaultCredentialsPath = join(parentDshHome, '.credentials.yaml')
+    this.sharedImageQueueRoot = resolveTenantImageQueueRoot(parentDshHome, process.env.DSH_CODEX_IMAGE_QUEUE_ROOT)
     this.patches = options.patches.map(path => resolve(path))
     this.childExecArgv = portableChildExecArgv(options.execArgv, this.originalCwd)
     const sweepMs = Math.min(options.idleTimeoutMs, 60_000)
@@ -407,16 +550,10 @@ class TenantManager {
       ...childPatches.flatMap(path => ['--patch', path]),
       '--host', '127.0.0.1', '--port', '0',
     ]
-    const env = { ...process.env }
-    // Product plugins that keep shared host-side queues still need one stable
-    // non-secret namespace per isolated child. The value is either "default"
-    // or the launcher's SHA-256 directory key; never the user's identifier.
-    env.DSH_TENANT_KEY = layout.key
-    if (layout.home !== undefined && layout.dshHome !== undefined) {
-      env.HOME = layout.home
-      env.USERPROFILE = layout.home
-      env.DSH_HOME = layout.dshHome
-    }
+    // The queue root belongs to the parent deployment, while the tenant key
+    // remains either "default" or the SHA-256 directory key. Neither value is
+    // derived from the tenant child's private HOME/DSH_HOME.
+    const env = resolveTenantChildEnvironment(layout, this.sharedImageQueueRoot, process.env)
     const child = spawn(process.execPath, args, { cwd: this.originalCwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -424,6 +561,9 @@ class TenantManager {
     child.stderr.on('data', (chunk: string) => { process.stderr.write(`[tenant ${label}] ${chunk}`) })
     try {
       const port = await this.readyPort(child, label)
+      if (this.options.defaultSkin !== undefined) {
+        await ensureDefaultTenantSkin(layout.dshHome ?? this.defaultDshHome, port, this.options.defaultSkin)
+      }
       const runtime: TenantRuntime = { ...layout, child, port, active: 0, lastUsedAt: Date.now() }
       child.once('exit', () => {
         if (this.runtimes.get(layout.key)?.child === child) this.runtimes.delete(layout.key)

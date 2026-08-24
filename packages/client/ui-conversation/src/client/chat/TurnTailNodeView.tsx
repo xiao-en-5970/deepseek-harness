@@ -3,6 +3,7 @@ import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatNodeViewProps, TurnTailOwnerProps } from '../contract/slots.ts'
 import { MessageIconActions } from './MessageIconActions.tsx'
 import { assistantText } from './turn-assistant.ts'
+import { formatDeepSeekCost } from './deepseek-cost.ts'
 import css from './TurnTailNodeView.module.css'
 
 type TurnTailNodeViewProps = ChatNodeViewProps<'turn-tail'>
@@ -35,6 +36,11 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
   return (
     <div className={css.root} data-turn-tail={data.turn} data-time-hover-root>
       {tail}
+      {data.costCny !== undefined && (
+        <span className={css.cost} title={t('message.costDetail')}>
+          {t('message.cost', { cost: formatDeepSeekCost(data.costCny) })}
+        </span>
+      )}
       <MessageIconActions
         text={assistantText(closing.blocks)}
         time={closing.time}

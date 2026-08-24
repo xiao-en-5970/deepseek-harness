@@ -12,7 +12,7 @@
  */
 
 import { writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
@@ -170,6 +170,12 @@ function composeProfile(
   return { profile, bundlePatches, homePatches, overlays: composedOverlays, rows }
 }
 
+/** Aggregate skin asset root derived from the resolved Web profile bundle. */
+export function profileSkinsDirectory(profile: Profile): string | undefined {
+  const aggregate = profile.layers.find(layer => layer.packageName === '@linxin666/dsh-skins')
+  return aggregate === undefined ? undefined : dirname(aggregate.packageDir)
+}
+
 /** Options for {@link runProfile}. */
 export interface RunProfileOptions {
   /** This run's frozen environment snapshot, provided before any entry mounts. */
@@ -245,18 +251,36 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
   ])
   // Cloned for the same insert-aliasing reason as composeLive: the boot
   // application must not mutate the objects later reloads recompose from.
-  const ctx = await boot(NAME, rootConfig, structuredClone(allPatches(composed)), (hostCtx) => {
-    app.current = hostCtx
-    // Before any config-tree entry mounts, so plugins resolve all launch-time
-    // environment values from the same immutable provenance snapshot.
-    hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, options.environment)
-    // The command line and bounded exit request are launcher facts available
-    // to every app plugin that injects the argument snapshot.
-    provideCmdline(hostCtx, {
-      args: options.args,
-      exit: code => void shutdown.shutdown(code),
+  // The aggregate's skin-center dependency can be pnpm-deduped outside the
+  // aggregate package's physical directory. Its documented DSH_SKINS_DIR
+  // override points registry discovery at the resolved aggregate scope. Keep
+  // an explicit deployment override authoritative, and restore this derived
+  // process-local bridge as soon as the boot graph has imported the plugin.
+  const configuredSkinsDir = process.env.DSH_SKINS_DIR
+  const derivedSkinsDir = configuredSkinsDir === undefined || configuredSkinsDir.trim() === ''
+    ? profileSkinsDirectory(composed.profile)
+    : undefined
+  if (derivedSkinsDir !== undefined) process.env.DSH_SKINS_DIR = derivedSkinsDir
+  let ctx: Context
+  try {
+    ctx = await boot(NAME, rootConfig, structuredClone(allPatches(composed)), (hostCtx) => {
+      app.current = hostCtx
+      // Before any config-tree entry mounts, so plugins resolve all launch-time
+      // environment values from the same immutable provenance snapshot.
+      hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, options.environment)
+      // The command line and bounded exit request are launcher facts available
+      // to every app plugin that injects the argument snapshot.
+      provideCmdline(hostCtx, {
+        args: options.args,
+        exit: code => void shutdown.shutdown(code),
+      })
     })
-  })
+  } finally {
+    if (derivedSkinsDir !== undefined) {
+      if (configuredSkinsDir === undefined) delete process.env.DSH_SKINS_DIR
+      else process.env.DSH_SKINS_DIR = configuredSkinsDir
+    }
+  }
   app.current = ctx
   // A surface can dispose the whole tree while boot or this post-boot watcher
   // setup is still in flight — a signal, or a fast one-shot's appExit. Loader

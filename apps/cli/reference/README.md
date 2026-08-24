@@ -77,11 +77,14 @@ That generated patch also points the named child's credential provider at the de
 
 Children listen on OS-assigned loopback ports and start only on first use. `--max-active-tenants` bounds simultaneously running children; a full gateway evicts the least-recent idle child and returns 503 when every child has an active HTTP or WebSocket lease. `--idle-timeout-ms` stops inactive children, and `--start-timeout-ms` bounds boot. Stopping the gateway terminates every owned child. Restarting a stopped child reopens the same durable roots.
 
+The Web profile includes the skin-center bundle. Each child persists its active skin through its own profile patch, so the default space and named identifiers remain independent. `--default-skin` calls the child's loopback skin-center API only on its first successful start, waits until the selected skin is present in the served boot manifest, and then records a marker below that child's `DSH_HOME`. A restart therefore never overwrites a later selection made in **Settings → Skin Center**. An explicit `DSH_SKINS_DIR` remains authoritative for deployments that provide another compatible skin catalog.
+
 | Argument | Default | Meaning |
 |---|---:|---|
 | `--host` | `127.0.0.1` | Loopback bind; any other value is rejected. |
 | `--port` | `3080` | Gateway listen port; `0` asks the OS to choose. |
 | `--tenant-root` | `$DSH_HOME/tenant-web` | Durable root for named tenants. |
+| `--default-skin` | none | Lowercase kebab-case skin id to apply once on each identifier's first start. |
 | `--max-active-tenants` | `8` | Maximum live child processes. |
 | `--idle-timeout-ms` | `1800000` | Idle child lifetime. |
 | `--start-timeout-ms` | `120000` | Child readiness budget. |

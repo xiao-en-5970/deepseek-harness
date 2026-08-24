@@ -109,6 +109,7 @@ import {
   inspectApiRemoteSession,
 } from '@deepseek-ai/dsh-api-remotes'
 import { canOpenNativePath, openNativePath, openNativeTextFile } from './native-path-opener.ts'
+import { WorkspaceDownloadError, workspaceDownloadResponse } from './workspace-download.ts'
 
 /** Page size when history is called without maxMessages. */
 const DEFAULT_MAX_MESSAGES = 50
@@ -234,6 +235,11 @@ function imageInEvent(event: SessionEvent, match: (ref: ImageAttachmentRef) => b
 /** True when the current model-visible surface contains an image. */
 function messagesHaveImage(messages: readonly { content: readonly ContentBlock[] }[]): boolean {
   return messages.some(message => contentHasImage(message.content))
+}
+
+/** A text-only model may retain user images only through the scoped image-tool bridge. */
+function hasImageToolBridge(ctx: Context, agent: Agent): boolean {
+  return ctx.get('tools')?.schemas(agent).some(schema => schema.name === 'generate_image') === true
 }
 
 /** Resolve the first reference matching one opaque id. */
@@ -2296,7 +2302,8 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
               .some(message => contentHasImage(message.content))
             if (pendingImage || messagesHaveImage(found.agent.session.deriveMessages())) {
               const info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model)
-              if (info.inputModalities !== undefined && !info.inputModalities.includes('image')) {
+              if (info.inputModalities !== undefined && !info.inputModalities.includes('image')
+                && !hasImageToolBridge(ctx, found.agent)) {
                 return err(request, {
                   code: 'model-unavailable',
                   message: `Model "${resolved.model}" does not accept image input, but this session already contains images; select an image-capable model.`,
@@ -2485,7 +2492,8 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             if (hasImage) {
               const current = selectionFor(agent).current
               const modelInfo = await ctx.llm.resolveModelInfo(current.provider, current.model)
-              if (modelInfo.inputModalities !== undefined && !modelInfo.inputModalities.includes('image')) {
+              if (modelInfo.inputModalities !== undefined && !modelInfo.inputModalities.includes('image')
+                && !hasImageToolBridge(ctx, agent)) {
                 return err(request, {
                   code: 'attachment-error',
                   message: `Model "${current.model}" does not support image input.`,
@@ -3005,6 +3013,41 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         }
       },
 
+      async listWorkspaceFiles(request, signal) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.listWorkspaceFiles needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          return ok(request, await capability.listWorkspaceFiles(request.payload.path, signal))
+        } catch (error: unknown) {
+          if (signal.aborted) {
+            return err(request, { code: 'cancelled', message: 'workspace file listing was aborted', details: {} })
+          }
+          return err(request, directoryError(error))
+        }
+      },
+
+      async createFile(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.createFile needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          return ok(request, { path: await capability.createFile(request.payload.path, request.payload.name) })
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
       async beginDirectoryUpload(request) {
         const capability = ctx.directoryPicker.capability()
         if (capability.kind !== 'browse') {
@@ -3064,6 +3107,71 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         }
         try {
           await capability.abortDirectoryUpload(request.payload.uploadId)
+          return ok(request, { aborted: true })
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
+      async beginFileUpload(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.beginFileUpload needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          return ok(request, await capability.beginFileUpload(request.payload))
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
+      async writeFileUpload(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.writeFileUpload needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          return ok(request, await capability.writeFileUpload(request.payload))
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
+      async completeFileUpload(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.completeFileUpload needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          return ok(request, { path: await capability.completeFileUpload(request.payload.uploadId) })
+        } catch (error: unknown) {
+          return err(request, directoryError(error))
+        }
+      },
+
+      async abortFileUpload(request) {
+        const capability = ctx.directoryPicker.capability()
+        if (capability.kind !== 'browse') {
+          return err(request, {
+            code: 'directory-picker-unavailable',
+            message: `host.abortFileUpload needs the browse capability; the composed picker serves "${capability.kind}"`,
+            details: { capability: capability.kind },
+          })
+        }
+        try {
+          await capability.abortFileUpload(request.payload.uploadId)
           return ok(request, { aborted: true })
         } catch (error: unknown) {
           return err(request, directoryError(error))
@@ -3466,6 +3574,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         return ok(request, await buildModelCatalog(ctx))
       },
 
+      async balance(request, signal) {
+        const { provider } = request.payload
+        try {
+          const balance = await ctx.llm.accountBalance(provider, signal)
+          return ok(request, {
+            ...balance === undefined ? {} : {
+              balance: { ...balance, balances: balance.balances.map(item => ({ ...item })) },
+            },
+          })
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'balance-query-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider },
+          })
+        }
+      },
+
       async discoverModels(request, signal) {
         const { settingsNs, provider, baseURL, api, apiKey } = request.payload
         try {
@@ -3702,6 +3828,27 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     },
 
     downloads: {
+      async workspacePath(request, signal) {
+        const picker = ctx.get('directoryPicker')
+        const capability = picker?.capability()
+        if (capability?.kind !== 'browse' || capability.resolveWorkspaceDownload === undefined) {
+          return new Response('Workspace download is unavailable.', { status: 501 })
+        }
+        try {
+          const target = await capability.resolveWorkspaceDownload(request.path, signal)
+          signal.throwIfAborted()
+          return await workspaceDownloadResponse(target, signal)
+        } catch (error: unknown) {
+          signal.throwIfAborted()
+          if (error instanceof DirectoryPickerError) {
+            return new Response('Workspace download target is unavailable.', { status: 400 })
+          }
+          if (error instanceof WorkspaceDownloadError) {
+            return new Response(error.message, { status: error.status })
+          }
+          return new Response('Workspace download failed.', { status: 500 })
+        }
+      },
       async sessionLog(request, signal) {
         // Clean error path first: missing services answer 500 and a missing
         // root artifact 404 before any zip byte is produced. The root content

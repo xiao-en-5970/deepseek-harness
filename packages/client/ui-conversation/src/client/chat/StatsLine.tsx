@@ -1,17 +1,19 @@
 // Settled-node identity prevents stream-delta updates from rerendering this row.
-// Mounted on 'conversation.composer.dock' so it sticks with the composer in the
-// active conversation scrollport (see ConversationRoot data-conversation-scroll).
+// The historical 'conversation.composer.dock' extension key now renders as a
+// dedicated metadata band below the session header and above the work area.
 
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { memo, useEffect, useMemo, useState } from 'react'
 import type { ConversationSnapshot, UseProjection } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: merges the sessionStats key into SessionProjectionMap for useProjection.
 import type {} from '@deepseek-ai/dsh-session-stats/client'
-import type { ContextPressureProjection, TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
+import {
+  type ContextPressureProjection, type TokenUsageProjection,
+} from '@deepseek-ai/dsh-token-meter/client'
 import type { ComposerBarProps } from '../contract/slots.ts'
 import { formatTokensPerSecond } from './message-chrome.ts'
 import { assistantStepReading } from './turn-metrics.ts'
+import { formatDeepSeekCost } from './deepseek-cost.ts'
 import css from './StatsLine.module.css'
 
 interface WindowStats {
@@ -158,11 +160,50 @@ export interface StatsLineProps {
   useProjection: UseProjection
   /** The owning dock's locale seat. */
   t: ComposerBarProps['t']
+  /** Tenant-local aggregate plus Host-side balance lookup; credentials never enter the browser. */
+  loadBillingSummary?: () => Promise<{
+    balance?: string
+    workspaceCny: number
+    identifierCny: number
+  }>
 }
 
-export const StatsLine = memo(function StatsLine({ useSession, useProjection, t }: StatsLineProps) {
+const NO_BILLING_SUMMARY = (): Promise<{
+  workspaceCny: number
+  identifierCny: number
+}> => Promise.resolve({ workspaceCny: 0, identifierCny: 0 })
+
+export const StatsLine = memo(function StatsLine({
+  useSession, useProjection, t, loadBillingSummary = NO_BILLING_SUMMARY,
+}: StatsLineProps) {
   const settledNodes = useSession(s => s.chat.legacy.nodes)
   const usage = useProjection('tokenUsage')
+  const cost = useProjection('deepSeekCost')
+  const [billingSummary, setBillingSummary] = useState<{
+    balance?: string
+    workspaceCny: number
+    identifierCny: number
+  }>()
+  useEffect(() => {
+    if (cost === undefined || cost.requests === 0) {
+      setBillingSummary(undefined)
+      return
+    }
+    let alive = true
+    const refresh = () => {
+      void loadBillingSummary().then((value) => {
+        if (alive) setBillingSummary(value)
+      }, () => {
+        if (alive) setBillingSummary(undefined)
+      })
+    }
+    refresh()
+    const timer = setInterval(refresh, 60_000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [cost?.requests, loadBillingSummary])
   // Every figure rides the durable sessionStats projection, so paging and
   // compaction cannot change any of them; an assembly without the unit falls
   // back to the window-scoped fold wholesale (same field names), paid only
@@ -203,32 +244,23 @@ export const StatsLine = memo(function StatsLine({ useSession, useProjection, t 
       output: formatTokens(usage.outputTokens),
     }))
   }
-  const line = groups.join(' | ')
-  // The row elides with ellipsis when overlong; a delayed hover tooltip carries
-  // the full line, enabled only while content is actually clipped.
-  const rootRef = useRef<HTMLDivElement | null>(null)
-  const [truncated, setTruncated] = useState(false)
-  useLayoutEffect(() => {
-    const el = rootRef.current
-    if (el === null) return
-    const measure = () => { setTruncated(el.scrollWidth > el.clientWidth) }
-    measure()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(measure)
-    observer.observe(el)
-    return () => { observer.disconnect() }
-  }, [line])
+  if (cost !== undefined && cost.requests > 0) {
+    groups.push(t('stats.cost', { cost: formatDeepSeekCost(cost.cny) }))
+  }
+  if (billingSummary !== undefined) {
+    groups.push(t('stats.workspaceCost', { cost: formatDeepSeekCost(billingSummary.workspaceCny) }))
+    groups.push(t('stats.identifierCost', { cost: formatDeepSeekCost(billingSummary.identifierCny) }))
+    if (billingSummary.balance !== undefined) groups.push(t('stats.balance', { balance: billingSummary.balance }))
+  }
   if (groups.length === 0) return null
   return (
-    <Tooltip label={line} side="top" delayMs={500} disabled={!truncated}>
-      <div ref={rootRef} className={css.root}>
-        {groups.map((group, i) => (
-          <Fragment key={group}>
-            {i > 0 && <><span className={css.sep} aria-hidden>|</span>{' '}</>}
-            <span>{group}</span>
-          </Fragment>
-        ))}
-      </div>
-    </Tooltip>
+    <div className={css.root} aria-label={groups.join(' | ')}>
+      {groups.map((group, i) => (
+        <span key={group} className={css.group}>
+          {i > 0 && <><span className={css.sep} aria-hidden>|</span>{' '}</>}
+          {group}
+        </span>
+      ))}
+    </div>
   )
 })

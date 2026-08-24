@@ -77,11 +77,14 @@ profile 启动模式将运行命令时所在的目录作为默认 workspace 根�
 
 子进程监听由 OS 分配的 loopback 端口，仅在首次使用时启动。`--max-active-tenants` 限制同时运行的子进程数量；网关满载时会驱逐最久未使用的空闲子进程，而所有子进程都有活跃 HTTP 或 WebSocket 租约时返回 503。`--idle-timeout-ms` 停止不活跃的子进程，`--start-timeout-ms` 限制启动时间。停止网关会终止它拥有的全部子进程；再次启动已停止的子进程会重新打开同一套持久化根目录。
 
+Web profile 内置皮肤中心组合包。每个子进程通过自身的 profile patch 持久化当前皮肤，因此默认空间与各命名标识符互不影响。`--default-skin` 只会在子进程首次成功启动时调用其 loopback 皮肤中心 API，等待所选皮肤出现在实际提供的启动 manifest 后，才在该子进程的 `DSH_HOME` 下记录标记。因此网关重启不会覆盖用户后来在「设置 → 皮肤中心」作出的选择。对于提供其他兼容皮肤目录的部署，显式设置的 `DSH_SKINS_DIR` 仍具有最高优先级。
+
 | 参数 | 默认值 | 含义 |
 |---|---:|---|
 | `--host` | `127.0.0.1` | loopback 绑定；拒绝其他值。 |
 | `--port` | `3080` | 网关监听端口；`0` 表示交由 OS 选择。 |
 | `--tenant-root` | `$DSH_HOME/tenant-web` | 命名租户的持久化根目录。 |
+| `--default-skin` | 无 | 在每个标识符首次启动时一次性应用的小写 kebab-case 皮肤 id。 |
 | `--max-active-tenants` | `8` | 同时存活的子进程上限。 |
 | `--idle-timeout-ms` | `1800000` | 空闲子进程存活时间。 |
 | `--start-timeout-ms` | `120000` | 子进程就绪预算。 |

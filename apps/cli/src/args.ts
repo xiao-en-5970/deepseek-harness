@@ -50,6 +50,8 @@ interface TenantWebInvocation {
   host: '127.0.0.1'
   port: number
   tenantRoot?: string
+  /** One-time initial skin for each identifier; later user choices win. */
+  defaultSkin?: string
   maxActiveTenants: number
   idleTimeoutMs: number
   startTimeoutMs: number
@@ -81,7 +83,7 @@ Examples:
   dsh --profile tui --patch ./extra.yml      boot a custom profile with one extra overlay
   dsh --profile tui --resume <session>       arguments after the launcher flags reach the app
   dsh --profile web --help                   the web app's own flags and help
-  dsh tenant-web                             require a browser identifier and isolate each identifier's Web data
+  dsh tenant-web --default-skin maid-atelier isolate browser identifiers and seed each one's first skin
   dsh plugin --profile tui add <package>     install a plugin into the tui profile
 `
 
@@ -207,6 +209,7 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
     .option('--host <host>', 'bind host (loopback only)', '127.0.0.1')
     .option('--port <port>', 'listen port; pass 0 to let the OS choose', '3080')
     .option('--tenant-root <path>', 'named-tenant data root (default: $DSH_HOME/tenant-web)')
+    .option('--default-skin <id>', 'apply this skin once when an identifier first starts; later choices are retained')
     .option('--max-active-tenants <count>', 'maximum simultaneously running tenant children', '8')
     .option('--idle-timeout-ms <ms>', 'stop an idle tenant child after this duration', '1800000')
     .option('--start-timeout-ms <ms>', 'maximum tenant child startup time', '120000')
@@ -215,6 +218,7 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
       host: string
       port: string
       tenantRoot?: string
+      defaultSkin?: string
       maxActiveTenants: string
       idleTimeoutMs: string
       startTimeoutMs: string
@@ -224,11 +228,16 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
       if (options.host !== '127.0.0.1') {
         tenantWeb.error('error: tenant-web binds loopback only; put authentication and TLS on an outer reverse proxy')
       }
+      if (options.defaultSkin !== undefined
+        && (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(options.defaultSkin) || options.defaultSkin.length > 64)) {
+        tenantWeb.error(`error: --default-skin must be a lowercase kebab-case id up to 64 characters, got ${JSON.stringify(options.defaultSkin)}`)
+      }
       resolved = {
         mode: 'tenant-web',
         host: '127.0.0.1',
         port: integerOption(tenantWeb, '--port', options.port, 0, 65_535),
         ...options.tenantRoot !== undefined && { tenantRoot: options.tenantRoot },
+        ...options.defaultSkin !== undefined && { defaultSkin: options.defaultSkin },
         maxActiveTenants: integerOption(tenantWeb, '--max-active-tenants', options.maxActiveTenants, 1),
         idleTimeoutMs: integerOption(tenantWeb, '--idle-timeout-ms', options.idleTimeoutMs, 1),
         startTimeoutMs: integerOption(tenantWeb, '--start-timeout-ms', options.startTimeoutMs, 1),

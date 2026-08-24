@@ -1,8 +1,9 @@
 /** Test-owned workspaces face: the renderer standard-kit observable plus recorded actions. */
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type {
-  DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart, IWorkspaces,
-  SessionId, SnapshotStore, WorkspaceId, WorkspaceListState, WorkspaceView,
+  DirectoryListing, DirectoryUploadChunk, DirectoryUploadSession, DirectoryUploadStart,
+  FileUploadChunk, FileUploadSession, FileUploadStart, IWorkspaces, SessionId, SnapshotStore,
+  WorkspaceFileListing, WorkspaceId, WorkspaceListState, WorkspaceView,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { workspaceListState } from './fixtures.ts'
 import type { Stabilizer } from './fixtures.ts'
@@ -199,6 +200,52 @@ export class TestWorkspaces implements IWorkspaces {
   async abortDirectoryUpload(uploadId: string): Promise<void> {
     this.calls.push({ method: 'abortDirectoryUpload', args: [uploadId] })
     await (this.stubs.get('abortDirectoryUpload')?.(uploadId) as Promise<void> | undefined)
+  }
+
+  /** List one Workspace file-tree level (recorded; empty by default). */
+  async listWorkspaceFiles(path: string, signal?: AbortSignal): Promise<WorkspaceFileListing> {
+    this.calls.push({ method: 'listWorkspaceFiles', args: [path, signal] })
+    const stub = this.stubs.get('listWorkspaceFiles')
+    if (stub !== undefined) return await (stub(path, signal) as Promise<WorkspaceFileListing>)
+    return { path, entries: [], truncated: false }
+  }
+
+  /** Create one empty Workspace file (recorded). */
+  async createFile(path: string, name: string): Promise<string> {
+    this.calls.push({ method: 'createFile', args: [path, name] })
+    const stub = this.stubs.get('createFile')
+    if (stub !== undefined) return await (stub(path, name) as Promise<string>)
+    return `${path}/${name}`
+  }
+
+  /** Begin one browser file upload (recorded). */
+  async beginFileUpload(input: FileUploadStart): Promise<FileUploadSession> {
+    this.calls.push({ method: 'beginFileUpload', args: [input] })
+    const stub = this.stubs.get('beginFileUpload')
+    if (stub !== undefined) return await (stub(input) as Promise<FileUploadSession>)
+    return { uploadId: '00000000-0000-4000-8000-000000000002', path: `${input.parentPath}/${input.name}`, maxChunkBytes: 1024 * 1024 }
+  }
+
+  /** Append one browser file-upload chunk (recorded). */
+  async writeFileUpload(input: FileUploadChunk): Promise<number> {
+    this.calls.push({ method: 'writeFileUpload', args: [input] })
+    const stub = this.stubs.get('writeFileUpload')
+    if (stub !== undefined) return await (stub(input) as Promise<number>)
+    return input.offset + (input.data === '' ? 0 : atob(input.data).length)
+  }
+
+  /** Complete one browser file upload (recorded). */
+  async completeFileUpload(uploadId: string): Promise<string> {
+    this.calls.push({ method: 'completeFileUpload', args: [uploadId] })
+    const stub = this.stubs.get('completeFileUpload')
+    if (stub !== undefined) return await (stub(uploadId) as Promise<string>)
+    return '/home/test/uploaded.txt'
+  }
+
+  /** Abort one browser file upload (recorded). */
+  async abortFileUpload(uploadId: string): Promise<void> {
+    this.calls.push({ method: 'abortFileUpload', args: [uploadId] })
+    await (this.stubs.get('abortFileUpload')?.(uploadId) as Promise<void> | undefined)
   }
 
   /**

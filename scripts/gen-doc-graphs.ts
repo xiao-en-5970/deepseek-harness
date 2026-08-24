@@ -106,6 +106,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'The host commits accepted images before session events; provider adapters resolve authorized durable references into provider-native content.',
   },
   {
+    key: 'codexImageProxy',
+    pkg: 'codex-image-proxy',
+    title: 'Local Codex image generation queue',
+    mode: 'core',
+    consumers: ['tool-codex-image-proxy'],
+    note: 'The Web host owns the durable request queue and image route; the model-facing tool submits bounded requests and renders worker results.',
+  },
+  {
     key: 'llm',
     pkg: 'llm',
     title: 'LLM adapter registry',

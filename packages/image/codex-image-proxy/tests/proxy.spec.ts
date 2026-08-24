@@ -45,9 +45,9 @@ async function pendingRequest(queueRoot: string): Promise<{ requestId: string; p
 
 describe('Codex image proxy service', () => {
   it('treats only a bounded, well-shaped heartbeat as live', () => {
-    expect(workerIsFresh({ version: 1, workerId: 'w', updatedAt: 1_000 }, 1_500, 1_000)).toBe(true)
-    expect(workerIsFresh({ version: 1, workerId: 'w', updatedAt: 1_000 }, 2_001, 1_000)).toBe(false)
-    expect(workerIsFresh({ version: 2, workerId: 'w', updatedAt: 1_000 }, 1_500, 1_000)).toBe(false)
+    expect(workerIsFresh({ version: QUEUE_PROTOCOL_VERSION, workerId: 'w', updatedAt: 1_000 }, 1_500, 1_000)).toBe(true)
+    expect(workerIsFresh({ version: QUEUE_PROTOCOL_VERSION, workerId: 'w', updatedAt: 1_000 }, 2_001, 1_000)).toBe(false)
+    expect(workerIsFresh({ version: 1, workerId: 'w', updatedAt: 1_000 }, 1_500, 1_000)).toBe(false)
   })
 
   it('returns offline without creating a request when no worker heartbeat exists', async () => {
@@ -58,6 +58,41 @@ describe('Codex image proxy service', () => {
     expect(await readdir(join(queueRoot, 'tenants', 'default', 'pending'))).toEqual([])
   })
 
+  it('round-trips with no publicBaseUrl and returns a same-origin image path', async () => {
+    const { queueRoot, proxy } = await mount('')
+    await mkdir(queueRoot, { recursive: true })
+    await writeFile(join(queueRoot, 'heartbeat.json'), JSON.stringify({
+      version: QUEUE_PROTOCOL_VERSION,
+      workerId: 'test-worker',
+      updatedAt: Date.now(),
+    }))
+    const generation = proxy.generate({ prompt: 'a blue circle', context: '' }, new AbortController().signal)
+    const pending = await pendingRequest(queueRoot)
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 8, 9])
+    const tenant = join(queueRoot, 'tenants', 'default')
+    await Promise.all([
+      mkdir(join(tenant, 'images'), { recursive: true }),
+      mkdir(join(tenant, 'results'), { recursive: true }),
+    ])
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    await writeFile(join(tenant, 'images', `${pending.requestId}.png`), bytes)
+    await writeFile(join(tenant, 'results', `${pending.requestId}.json`), JSON.stringify({
+      version: QUEUE_PROTOCOL_VERSION,
+      requestId: pending.requestId,
+      status: 'completed',
+      mimeType: 'image/png',
+      bytes: bytes.byteLength,
+      sha256,
+      completedAt: Date.now(),
+    }))
+    await expect(generation).resolves.toMatchObject({
+      status: 'generated',
+      imageUrl: `/api/codex-image-proxy/image/${pending.requestId}`,
+      bytes: bytes.byteLength,
+      sha256,
+    })
+  })
+
   it('round-trips a durable request, validates the image, and serves it through the host route', async () => {
     const { queueRoot, proxy } = await mount()
     await mkdir(queueRoot, { recursive: true })
@@ -66,16 +101,31 @@ describe('Codex image proxy service', () => {
       workerId: 'test-worker',
       updatedAt: Date.now(),
     }))
-    const generation = proxy.generate({ prompt: 'a blue circle', context: 'flat icon' }, new AbortController().signal)
+    const referenceBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6])
+    const generation = proxy.generate({
+      prompt: 'turn the circle green',
+      context: 'flat icon',
+      referenceImages: [{ data: referenceBytes, mimeType: 'image/png', name: '../source.png' }],
+    }, new AbortController().signal)
     const pending = await pendingRequest(queueRoot)
     const request: unknown = JSON.parse(await readFile(pending.path, 'utf8'))
     expect(request).toMatchObject({
-      version: 1,
+      version: QUEUE_PROTOCOL_VERSION,
       requestId: pending.requestId,
       tenantKey: 'default',
-      prompt: 'a blue circle',
+      prompt: 'turn the circle green',
       context: 'flat icon',
+      referenceImages: [{
+        index: 0,
+        mimeType: 'image/png',
+        bytes: referenceBytes.byteLength,
+        sha256: createHash('sha256').update(referenceBytes).digest('hex'),
+        name: 'source.png',
+      }],
     })
+    expect(await readFile(join(
+      queueRoot, 'tenants', 'default', 'references', pending.requestId, '00.png',
+    ))).toEqual(referenceBytes)
 
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
     const tenant = join(queueRoot, 'tenants', 'default')
@@ -86,7 +136,7 @@ describe('Codex image proxy service', () => {
     const sha256 = createHash('sha256').update(bytes).digest('hex')
     await writeFile(join(tenant, 'images', `${pending.requestId}.png`), bytes)
     await writeFile(join(tenant, 'results', `${pending.requestId}.json`), JSON.stringify({
-      version: 1,
+      version: QUEUE_PROTOCOL_VERSION,
       requestId: pending.requestId,
       status: 'completed',
       mimeType: 'image/png',
@@ -102,5 +152,44 @@ describe('Codex image proxy service', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('image/png')
     expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes)
+    await expect(readFile(join(
+      queueRoot, 'tenants', 'default', 'references', pending.requestId, '00.png',
+    ))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('cleans staged reference bytes when the worker fails or the caller aborts', async () => {
+    const { queueRoot, proxy } = await mount()
+    await mkdir(queueRoot, { recursive: true })
+    await writeFile(join(queueRoot, 'heartbeat.json'), JSON.stringify({
+      version: QUEUE_PROTOCOL_VERSION,
+      workerId: 'test-worker',
+      updatedAt: Date.now(),
+    }))
+    const reference = { data: Uint8Array.of(0x89, 0x50, 0x4e, 0x47), mimeType: 'image/png' as const }
+
+    const failed = proxy.generate({ prompt: 'edit', context: '', referenceImages: [reference] }, new AbortController().signal)
+    const failedPending = await pendingRequest(queueRoot)
+    await mkdir(join(queueRoot, 'tenants', 'default', 'results'), { recursive: true })
+    await writeFile(join(queueRoot, 'tenants', 'default', 'results', `${failedPending.requestId}.json`), JSON.stringify({
+      version: QUEUE_PROTOCOL_VERSION,
+      requestId: failedPending.requestId,
+      status: 'failed',
+      message: 'test failure',
+      completedAt: Date.now(),
+    }))
+    await rm(failedPending.path)
+    await expect(failed).resolves.toMatchObject({ status: 'failed', message: 'test failure' })
+    await expect(readFile(join(
+      queueRoot, 'tenants', 'default', 'references', failedPending.requestId, '00.png',
+    ))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const controller = new AbortController()
+    const aborted = proxy.generate({ prompt: 'edit', context: '', referenceImages: [reference] }, controller.signal)
+    const abortedPending = await pendingRequest(queueRoot)
+    controller.abort(new Error('test abort'))
+    await expect(aborted).rejects.toThrow('test abort')
+    await expect(readFile(join(
+      queueRoot, 'tenants', 'default', 'references', abortedPending.requestId, '00.png',
+    ))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

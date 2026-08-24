@@ -56,6 +56,38 @@ export interface DirectoryListing {
   truncated: boolean
 }
 
+/** One child shown in the current Workspace's file tree. */
+export interface WorkspaceFileEntry {
+  /** Base name shown in the tree. */
+  name: string
+  /** Absolute Host path returned verbatim to later browse operations. */
+  path: string
+  /** Whether the entry can be expanded as a directory. */
+  kind: 'directory' | 'file'
+  /** Hidden by the Host platform's convention. */
+  hidden: boolean
+}
+
+/** One bounded directory level for the current Workspace file tree. */
+export interface WorkspaceFileListing {
+  /** Absolute path of the listed directory. */
+  path: string
+  /** Direct children, name-sorted. */
+  entries: WorkspaceFileEntry[]
+  /** True when the name-sorted tail was cut at the provider's result bound. */
+  truncated: boolean
+}
+
+/** One canonical, browse-root-confined target approved for download. */
+export interface WorkspaceDownloadTarget {
+  /** Canonical Host path; consumers must not resolve the browser value again. */
+  path: string
+  /** Safe attachment display name derived from the canonical target. */
+  name: string
+  /** Whether the carrier should stream one file or build one directory archive. */
+  kind: 'directory' | 'file'
+}
+
 /**
  * The browse interaction: listing/creation/upload primitives an in-app browser
  * drives one level at a time. Works for remote clients — nothing renders on
@@ -85,6 +117,27 @@ export interface DirectoryPickerBrowseCapability {
    * `directory-create-failed` for a parent that is not fully qualified or any other failure.
    */
   createDirectory(path: string, name: string): Promise<string>
+  /**
+   * List files and directories for a Workspace file-tree level.
+   * @param path - fully qualified directory inside the provider's browse root.
+   * @param signal - caller lifetime; abort stops the scan.
+   * @returns the bounded direct-child listing.
+   */
+  listWorkspaceFiles(path: string, signal?: AbortSignal): Promise<WorkspaceFileListing>
+  /**
+   * Resolve one file-tree entry for a read-only download through the same
+   * realpath and browse-root fence as listing. Providers that predate the
+   * download surface may omit this optional capability; callers then report
+   * download unavailable instead of weakening confinement.
+   */
+  resolveWorkspaceDownload?(path: string, signal?: AbortSignal): Promise<WorkspaceDownloadTarget>
+  /**
+   * Create one empty file without replacing an existing entry.
+   * @param path - fully qualified existing parent directory.
+   * @param name - single non-blank path segment.
+   * @returns the created file's absolute path.
+   */
+  createFile(path: string, name: string): Promise<string>
   /** Begin a bounded browser-to-host directory upload under an existing parent. */
   beginDirectoryUpload(input: DirectoryUploadStart): Promise<DirectoryUploadSession>
   /** Append one ordered base64 chunk to a file in an active upload. */
@@ -93,6 +146,14 @@ export interface DirectoryPickerBrowseCapability {
   completeDirectoryUpload(uploadId: string): Promise<string>
   /** Remove an incomplete upload root; unknown/expired ids are an idempotent no-op. */
   abortDirectoryUpload(uploadId: string): Promise<void>
+  /** Begin one bounded browser-to-host file upload under an existing parent. */
+  beginFileUpload(input: FileUploadStart): Promise<FileUploadSession>
+  /** Append one ordered base64 chunk to an active file upload. */
+  writeFileUpload(input: FileUploadChunk): Promise<DirectoryUploadProgress>
+  /** Publish the file after its declared bytes have landed. */
+  completeFileUpload(uploadId: string): Promise<string>
+  /** Remove an incomplete file upload; unknown/expired ids are an idempotent no-op. */
+  abortFileUpload(uploadId: string): Promise<void>
 }
 
 /** Manifest totals and destination for one local-directory upload. */
@@ -122,6 +183,28 @@ export interface DirectoryUploadChunk {
 /** Next byte offset acknowledged after one chunk. */
 export interface DirectoryUploadProgress {
   offset: number
+}
+
+/** Destination and exact byte total of one local-file upload. */
+export interface FileUploadStart {
+  parentPath: string
+  name: string
+  totalBytes: number
+}
+
+/** Server-owned file-upload identity and decoded chunk bound. */
+export interface FileUploadSession {
+  uploadId: string
+  path: string
+  maxChunkBytes: number
+}
+
+/** One ordered base64 chunk of an active file upload. */
+export interface FileUploadChunk {
+  uploadId: string
+  offset: number
+  data: string
+  done: boolean
 }
 
 /**

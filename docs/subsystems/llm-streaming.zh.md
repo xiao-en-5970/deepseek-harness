@@ -575,6 +575,25 @@ interface LlmModelDiscoveryRequest {
 ```
 
 ```ts type-equiv
+/** One currency bucket returned by a provider's account-balance endpoint. */
+interface LlmBalanceInfo {
+  currency: string
+  totalBalance: string
+  grantedBalance: string
+  toppedUpBalance: string
+}
+```
+
+```ts type-equiv
+/** Provider account balance resolved with the host-owned credential. */
+interface LlmAccountBalance {
+  provider: string
+  available: boolean
+  balances: readonly LlmBalanceInfo[]
+}
+```
+
+```ts type-equiv
 /**
  * One model an endpoint reports about itself. Every field but the id is
  * optional because most provider listings disclose an id and nothing else;
@@ -684,6 +703,13 @@ declare abstract class LlmAdapter {
    * @returns discoverable models in adapter-preferred order.
    */
   listModels(_provider: string): Promise<readonly LlmModelInfo[]>;
+  /**
+   * Read this route's provider account balance, when the provider exposes one.
+   * @param _provider - one provider route owned by this adapter.
+   * @param _signal - optional cancellation for provider lookup.
+   * @returns provider balance data, or undefined when unsupported.
+   */
+  accountBalance(_provider: string, _signal?: AbortSignal): Promise<LlmAccountBalance | undefined>;
   /**
    * Resolve all metadata available for one exact model. This query is
    * independent of the advisory catalog and does not validate request routing.
@@ -795,6 +821,14 @@ providerRetryPolicy(provider: string): ResolvedRetryPolicy
 async listModels(provider: string): Promise<LlmModelInfo[]>
 
 /**
+ * Read one registered route's account balance without exposing its credential.
+ * @param provider - registered provider route to inspect.
+ * @param signal - optional cancellation for the provider request.
+ * @returns detached balance data, or undefined when the adapter does not expose balance lookup.
+ */
+async accountBalance(provider: string, signal?: AbortSignal): Promise<LlmAccountBalance | undefined>
+
+/**
  * Resolve and validate all metadata from the adapter that owns one exact
  * route. The result is detached from adapter-owned objects; catalog
  * membership remains advisory and does not control request routing.
@@ -841,7 +875,7 @@ async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<Prepared
 stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:284`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:295`](../../packages/llm/llm/src/index.ts)
 
 <a id="llm-events"></a>
 
@@ -890,5 +924,5 @@ Waterfall around every streaming model call (retry, replay, routing). Bound to t
 'llm/stream'(this: LlmRuntime, options: GenerateOptions, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:64`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:65`](../../packages/llm/llm/src/index.ts)
 <!-- END GENERATED cordis-surface -->

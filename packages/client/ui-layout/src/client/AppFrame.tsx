@@ -13,14 +13,22 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import { computeColumns, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
+import {
+  clampWidth, computeColumns, DETAILS_DEFAULT, DETAILS_MAX, DETAILS_MIN,
+  SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT,
+} from './columns.ts'
 import type { createLayoutStore } from './stores.ts'
 import css from './AppFrame.module.css'
+
+/** Phone layout breakpoint: below this width the shell uses full-screen pages. */
+const MOBILE_BREAKPOINT = 720
+
+type MobileScreen = 'chat' | 'files' | 'details'
 
 /** Full composed props: runtime share + child-slot render share + store share. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
+  & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'workspace.files' | 'shell.overlay'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
 
 /** Center column grid item (session-body building block). */
@@ -87,6 +95,7 @@ function DragHandle(props: { side: 'sidebar' | 'details'; left: number; onStart:
 export function AppFrame({
   useStore,
   useSessions,
+  useWorkspaces,
   actions,
   renderSlot,
 }: AppFrameProps) {
@@ -95,8 +104,15 @@ export function AppFrame({
     const current = s.current
     return current !== undefined && s.byId[current]?.blank === false ? current : undefined
   })
+  const currentSessionId = useSessions(s => s.current)
+  const currentSessionCwd = useSessions(s => s.current === undefined ? undefined : s.byId[s.current]?.cwd)
+  const workspaceFilesAvailable = useWorkspaces(s => s.items.some(workspace => (
+    currentSessionId !== undefined && workspace.sessionIds.includes(currentSessionId)
+  ) || workspace.path === currentSessionCwd))
   const frameRef = useRef<HTMLDivElement | null>(null)
   const [viewport, setViewport] = useState(() => window.innerWidth)
+  const [mobileScreen, setMobileScreen] = useState<MobileScreen>('chat')
+  const previousMobileSession = useRef(currentSessionId)
 
   const lastSession = useRef(detailsSession)
   useLayoutEffect(() => {
@@ -134,12 +150,18 @@ export function AppFrame({
   // (or the default when the wide preference is closed) and the center
   // absorbs the squeeze.
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
+  const mobile = viewport < MOBILE_BREAKPOINT
   useEffect(() => { actions.setNarrow(narrow) }, [actions, narrow])
   const sidebarCollapsed = narrow ? !panels.narrowExpanded : panels.sidebar === 0
   const sidebarPreference = sidebarCollapsed
     ? 0
     : panels.sidebar === 0 ? SIDEBAR_DEFAULT : panels.sidebar
-  const cols = computeColumns(viewport, sidebarPreference, detailsSession === undefined ? 0 : panels.details)
+  const detailsOpen = detailsSession !== undefined && panels.details > 0
+  const mobilePage = mobile && panels.narrowExpanded ? 'menu' : mobileScreen
+  const filesOpen = workspaceFilesAvailable && (mobile ? mobilePage === 'files' : !detailsOpen)
+  const [filesWidth, setFilesWidth] = useState(DETAILS_DEFAULT)
+  const rightPreference = detailsOpen ? panels.details : filesOpen ? filesWidth : 0
+  const cols = computeColumns(viewport, sidebarPreference, rightPreference)
   const colsRef = useRef(cols)
   colsRef.current = cols
 
@@ -148,27 +170,56 @@ export function AppFrame({
   // it stays frozen for the whole gesture so dx deltas do not compound.
   const sidebarBase = useRef(0)
   const detailsBase = useRef(0)
+  const rightMode = useRef<'details' | 'files'>('files')
   // Track-level transitions pause for the whole gesture: eased tracks would
   // detach the column edge from the pointer (AppFrame.module.css).
   const [dragging, setDragging] = useState(false)
   const onDragEnd = useCallback(() => { setDragging(false) }, [])
   const onSidebarStart = useCallback(() => { sidebarBase.current = colsRef.current.sidebar; setDragging(true) }, [])
-  const onDetailsStart = useCallback(() => { detailsBase.current = colsRef.current.details; setDragging(true) }, [])
+  const onDetailsStart = useCallback(() => {
+    detailsBase.current = colsRef.current.details
+    rightMode.current = detailsOpen ? 'details' : 'files'
+    setDragging(true)
+  }, [detailsOpen])
   const onSidebarDrag = useCallback((dx: number) => {
     actions.setSidebar(sidebarBase.current + dx)
   }, [actions])
   const onDetailsDrag = useCallback((dx: number) => {
-    actions.setDetails(detailsBase.current - dx)
+    const width = detailsBase.current - dx
+    if (rightMode.current === 'details') actions.setDetails(width)
+    else setFilesWidth(clampWidth(width, DETAILS_MIN, DETAILS_MAX))
   }, [actions])
+
+  useEffect(() => {
+    if (!mobile) { setMobileScreen('chat'); return }
+    if (detailsOpen) setMobileScreen('details')
+    else setMobileScreen(screen => screen === 'details' ? 'chat' : screen)
+  }, [detailsOpen, mobile])
+  useEffect(() => {
+    const changed = previousMobileSession.current !== currentSessionId
+    previousMobileSession.current = currentSessionId
+    if (mobile && changed && panels.narrowExpanded) actions.toggleSidebar()
+  }, [actions, currentSessionId, mobile, panels.narrowExpanded])
+
+  const openMobileMenu = (): void => {
+    setMobileScreen('chat')
+    if (!panels.narrowExpanded) actions.toggleSidebar()
+  }
+  const closeMobilePage = (): void => {
+    if (mobilePage === 'details') actions.closeDetails()
+    else setMobileScreen('chat')
+  }
 
   return (
     <div
       ref={frameRef}
       className={css.frame}
-      style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.details}px` }}
-      data-sidebar-collapsed={sidebarCollapsed || undefined}
+      style={{ gridTemplateColumns: mobile ? '0px minmax(0, 1fr) 0px' : `${cols.sidebar}px minmax(0, 1fr) ${cols.details}px` }}
+      data-sidebar-collapsed={(mobile ? mobilePage !== 'menu' : sidebarCollapsed) || undefined}
       data-details-collapsed={cols.details === 0 || undefined}
       data-dragging={dragging || undefined}
+      data-mobile={mobile || undefined}
+      data-mobile-screen={mobile ? mobilePage : undefined}
     >
       <div className={css.sidebarCol}>
         {/* Render-site slot call with live concession output: a closed
@@ -177,8 +228,8 @@ export function AppFrame({
             (collapsed follows the resolved rail, so a derived auto-collapse
             renders the rail UI too). */}
         {renderSlot('sidebar', {
-          collapsed: sidebarCollapsed,
-          width: cols.sidebar,
+          collapsed: mobile && panels.narrowExpanded ? false : sidebarCollapsed,
+          width: mobile && panels.narrowExpanded ? viewport : cols.sidebar,
         })}
       </div>
       <>
@@ -188,14 +239,39 @@ export function AppFrame({
             is session-maybe; the strict details entry naturally renders
             empty while no session is current. */}
         <CenterColumn>{renderSlot('conversation', {})}</CenterColumn>
-        <DetailsColumn>{renderSlot('details', {})}</DetailsColumn>
+        <DetailsColumn>
+          <div className={css.rightPanel} hidden={!filesOpen}>
+            {renderSlot('workspace.files', {})}
+          </div>
+          <div className={css.rightPanel} hidden={!detailsOpen}>
+            {renderSlot('details', {})}
+          </div>
+        </DetailsColumn>
       </>
+      {mobile && mobilePage !== 'menu' && (
+        <nav className={css.mobileNav} aria-label="手机导航">
+          {mobilePage === 'chat' ? (
+            <button type="button" onClick={openMobileMenu} aria-label="打开菜单">☰</button>
+          ) : (
+            <button type="button" onClick={closeMobilePage} aria-label="返回聊天">‹</button>
+          )}
+          <strong>{mobilePage === 'chat' ? '聊天' : mobilePage === 'files' ? '工作区文件' : '详情'}</strong>
+          {mobilePage === 'chat' && (
+            <button
+              type="button"
+              onClick={() => { setMobileScreen('files') }}
+              disabled={!workspaceFilesAvailable}
+              aria-label="打开工作区文件"
+            >文件</button>
+          )}
+        </nav>
+      )}
       <div className={css.overlayLayer} data-shell-overlay>
         {renderSlot('shell.overlay', {})}
       </div>
       {/* The collapsed rail is fixed-width: no resize handle while closed. */}
-      {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
-      {cols.details > 0 && <DragHandle side="details" left={viewport - cols.details} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
+      {!mobile && !sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
+      {!mobile && cols.details > 0 && <DragHandle side="details" left={viewport - cols.details} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
     </div>
   )
 }

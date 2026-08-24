@@ -117,3 +117,102 @@
 .overlayLayer > * {
   pointer-events: auto;
 }
+
+.mobileNav {
+  display: none;
+}
+
+.frame[data-mobile] {
+  display: block;
+}
+
+.frame[data-mobile] .sidebarCol,
+.frame[data-mobile] .centerCol,
+.frame[data-mobile] .detailsCol {
+  position: absolute;
+  inset: 0;
+  border: none;
+}
+
+.frame[data-mobile] .sidebarCol,
+.frame[data-mobile] .detailsCol,
+.frame[data-mobile][data-mobile-screen='menu'] .centerCol,
+.frame[data-mobile][data-mobile-screen='files'] .centerCol,
+.frame[data-mobile][data-mobile-screen='details'] .centerCol {
+  display: none;
+}
+
+.frame[data-mobile][data-mobile-screen='menu'] .sidebarCol,
+.frame[data-mobile][data-mobile-screen='files'] .detailsCol,
+.frame[data-mobile][data-mobile-screen='details'] .detailsCol {
+  display: block;
+}
+
+.frame[data-mobile][data-mobile-screen='files'] .detailsCol,
+.frame[data-mobile][data-mobile-screen='details'] .detailsCol {
+  padding-top: 48px;
+  box-sizing: border-box;
+}
+
+.frame[data-mobile] .rightPanel {
+  height: 100%;
+  overflow: hidden;
+}
+
+.frame[data-mobile] .mobileNav {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 72px;
+  align-items: center;
+  padding: env(safe-area-inset-top) 8px 0;
+  background: var(--dsw-alias-bg-base);
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+.frame[data-mobile] .mobileNav strong {
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.frame[data-mobile] .mobileNav button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.frame[data-mobile] .mobileNav button:first-child {
+  justify-self: start;
+  font-size: 22px;
+}
+
+.frame[data-mobile] .mobileNav button:last-child {
+  justify-self: end;
+}
+
+.frame[data-mobile] .mobileNav button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.frame[data-mobile] .mobileNav button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.frame[data-mobile][data-mobile-screen='chat'] .centerCol {
+  padding-top: 48px;
+  box-sizing: border-box;
+}

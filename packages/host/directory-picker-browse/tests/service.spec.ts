@@ -137,7 +137,7 @@ describe('BrowseDirectoryPicker', () => {
   })
 
   it('boundedInsert keeps the window name-sorted and bounded, reporting evictions', () => {
-    const candidate = (name: string): ListingCandidate => ({ name, isDirectory: true, isSymbolicLink: false })
+    const candidate = (name: string): ListingCandidate => ({ name, isDirectory: true, isFile: false, isSymbolicLink: false })
     const window: ListingCandidate[] = []
     expect(boundedInsert(window, candidate('m'), 2)).toBe(false)
     expect(boundedInsert(window, candidate('z'), 2)).toBe(false)
@@ -268,6 +268,51 @@ describe('BrowseDirectoryPicker', () => {
     expect(listing.entries.map(entry => entry.name)).toContain('fresh')
   })
 
+  it('lists files and directories for a Workspace and creates an exclusive empty file', async () => {
+    const listing = await capability.listWorkspaceFiles(root)
+    expect(listing.entries.map(entry => entry.name)).toEqual(expect.arrayContaining([
+      '.hidden-dir', 'linked', 'notes.txt', 'projects',
+    ]))
+    expect(listing.entries.find(entry => entry.name === 'projects')?.kind).toBe('directory')
+    expect(listing.entries.find(entry => entry.name === 'notes.txt')?.kind).toBe('file')
+    expect(listing.entries.find(entry => entry.name === '.hidden-dir')?.hidden).toBe(true)
+    expect(listing.entries.some(entry => entry.name === 'broken')).toBe(false)
+
+    const target = await capability.createFile(root, 'empty-created.txt')
+    expect(target).toBe(join(root, 'empty-created.txt'))
+    await expect(readFile(target)).resolves.toHaveLength(0)
+    await expect(capability.createFile(root, 'empty-created.txt')).rejects.toMatchObject({ code: 'directory-exists' })
+    await expect(capability.createFile(root, '../escape.txt')).rejects.toMatchObject({ code: 'directory-create-failed' })
+  })
+
+  it('resolves downloads inside browseRoot and rejects outside or symlink targets', async () => {
+    const browseRoot = join(root, 'projects')
+    const outsideFile = join(root, 'outside-download.txt')
+    await writeFile(outsideFile, 'outside')
+    await writeFile(join(browseRoot, 'inside-download.txt'), 'inside')
+    await symlink(outsideFile, join(browseRoot, 'download-link'))
+    const ctx = new Context()
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({ maxEntries: 1000, browseRoot }))
+    await fiber.await()
+    const confined = ctx.get('directoryPicker')!.capability()
+    if (confined.kind !== 'browse' || confined.resolveWorkspaceDownload === undefined) {
+      throw new Error('browse backend must expose Workspace downloads')
+    }
+    try {
+      await expect(confined.resolveWorkspaceDownload(join(browseRoot, 'inside-download.txt'))).resolves.toMatchObject({
+        name: 'inside-download.txt', kind: 'file',
+      })
+      await expect(confined.resolveWorkspaceDownload(browseRoot)).resolves.toMatchObject({
+        name: basename(browseRoot), kind: 'directory',
+      })
+      await expect(confined.resolveWorkspaceDownload(outsideFile)).rejects.toMatchObject({ code: 'directory-unreadable' })
+      await expect(confined.resolveWorkspaceDownload(join(browseRoot, 'download-link'))).rejects.toMatchObject({ code: 'directory-unreadable' })
+      await expect(confined.resolveWorkspaceDownload('relative.txt')).rejects.toMatchObject({ code: 'directory-unreadable' })
+    } finally {
+      await fiber.dispose()
+    }
+  })
+
   it('refuses an existing child with directory-exists', async () => {
     const failure = await capability.createDirectory(root, 'projects').catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(DirectoryPickerError)
@@ -323,6 +368,44 @@ describe('BrowseDirectoryPicker', () => {
       await expect(uploader.completeDirectoryUpload(session.uploadId)).resolves.toBe(session.path)
       await expect(readFile(join(session.path, 'src', 'main.txt'), 'utf8')).resolves.toBe('hello')
       await expect(readFile(join(session.path, 'empty.txt'))).resolves.toHaveLength(0)
+    } finally {
+      await fiber.dispose()
+    }
+  })
+
+  it('uploads one Workspace file in bounded chunks without exposing a partial target', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin(BrowseDirectoryPicker, BrowseDirectoryPicker.Config({
+      maxEntries: 1000,
+      uploadRoot: root,
+      maxUploadChunkBytes: 2,
+      maxUploadFileBytes: 8,
+      maxUploadBytes: 8,
+      maxUploadFiles: 1,
+    }))
+    await fiber.await()
+    const uploader = ctx.get('directoryPicker')!.capability()
+    if (uploader.kind !== 'browse') throw new Error('browse backend must advertise the browse capability')
+    try {
+      const session = await uploader.beginFileUpload({ parentPath: root, name: 'single.txt', totalBytes: 5 })
+      expect(session.maxChunkBytes).toBe(2)
+      await uploader.writeFileUpload({
+        uploadId: session.uploadId, offset: 0, data: Buffer.from('he').toString('base64'), done: false,
+      })
+      await expect(stat(session.path)).rejects.toMatchObject({ code: 'ENOENT' })
+      await uploader.writeFileUpload({
+        uploadId: session.uploadId, offset: 2, data: Buffer.from('ll').toString('base64'), done: false,
+      })
+      await uploader.writeFileUpload({
+        uploadId: session.uploadId, offset: 4, data: Buffer.from('o').toString('base64'), done: true,
+      })
+      await expect(uploader.completeFileUpload(session.uploadId)).resolves.toBe(session.path)
+      await expect(readFile(session.path, 'utf8')).resolves.toBe('hello')
+
+      const aborted = await uploader.beginFileUpload({ parentPath: root, name: 'aborted.txt', totalBytes: 0 })
+      await uploader.abortFileUpload(aborted.uploadId)
+      await expect(uploader.abortFileUpload(aborted.uploadId)).resolves.toBeUndefined()
+      await expect(stat(aborted.path)).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await fiber.dispose()
     }

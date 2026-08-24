@@ -156,6 +156,12 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async createDirectory(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w/new' } } }
       },
+      async listWorkspaceFiles(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: request.payload.path, entries: [], truncated: false } } }
+      },
+      async createFile(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: `${request.payload.path}/${request.payload.name}` } } }
+      },
       async beginDirectoryUpload(request) {
         return {
           rpcId: request.rpcId,
@@ -169,6 +175,21 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
         return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w/local' } } }
       },
       async abortDirectoryUpload(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { aborted: true as const } } }
+      },
+      async beginFileUpload(request) {
+        return {
+          rpcId: request.rpcId,
+          result: { ok: true, value: { uploadId: '00000000-0000-4000-8000-000000000002', path: `${request.payload.parentPath}/${request.payload.name}`, maxChunkBytes: 1024 } },
+        }
+      },
+      async writeFileUpload(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { offset: request.payload.offset + 2 } } }
+      },
+      async completeFileUpload(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: `/w/${request.payload.uploadId}` } } }
+      },
+      async abortFileUpload(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { aborted: true as const } } }
       },
       async openPath(request) {
@@ -293,6 +314,9 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async models(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { groups: [], failures: [] } } }
       },
+      async balance(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: {} } }
+      },
       async discoverModels(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { models: [] } } }
       },
@@ -305,6 +329,9 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       return message.rpcId === 'known' ? { accepted: true } : { accepted: false, reason: 'not-pending' }
     },
     downloads: {
+      async workspacePath() {
+        return new Response('stub', { status: 404 })
+      },
       async sessionLog() {
         return new Response('stub', { status: 404 })
       },
@@ -665,6 +692,22 @@ describe('handler carrier-layer statuses', () => {
     const body = JSON.stringify({ type: 'client-request', rpcId: 'r-12', method: 'session.list', payload: {} })
     const response = await handler.fetch('http://x/api/session.list', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
     expect(response.status).toBe(200)
+  })
+
+  it('routes Workspace GET/HEAD downloads and validates the path query', async () => {
+    const api = fakeApi()
+    api.downloads.workspacePath = async ({ path }) => new Response(`download:${path}`, {
+      headers: { 'content-disposition': 'attachment; filename="file.txt"' },
+    })
+    const downloads = toFetchHandler(api)
+    const get = await downloads.fetch(new Request('http://x/api/workspace.download?path=%2Fw%2Ffile.txt'))
+    expect(get.status).toBe(200)
+    expect(await get.text()).toBe('download:/w/file.txt')
+    const head = await downloads.fetch(new Request('http://x/api/workspace.download?path=%2Fw%2Ffile.txt', { method: 'HEAD' }))
+    expect(head.status).toBe(200)
+    expect(head.headers.get('content-disposition')).toContain('file.txt')
+    expect(await head.text()).toBe('')
+    expect((await downloads.fetch(new Request('http://x/api/workspace.download'))).status).toBe(400)
   })
 })
 
