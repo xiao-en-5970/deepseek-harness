@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, CallId, ReasoningEffortId, createMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import { serializeMessages, serializeRequest } from '../src/serialize.ts'
+import { serializeMessages, serializeMessagesWithImages, serializeRequest } from '../src/serialize.ts'
 
 function request(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
   return { provider: 'deepseek-official', model: 'deepseek-v4-flash', messages: [], ...overrides }
@@ -144,6 +145,28 @@ describe('serializeMessages', () => {
       }],
       source: { kind: 'plugin', plugin: 'test' },
     })])).toThrow(expect.objectContaining({ code: 'UNSUPPORTED_CONTENT' }))
+  })
+
+  it('sends a vision-model image as a provider file part', async () => {
+    const attachment = {
+      attachmentId: AttachmentId(`sha256:${'c'.repeat(64)}`),
+      mediaType: 'image/png' as const, bytes: 3, width: 1, height: 1,
+    }
+    const attachments = {
+      readImage: vi.fn().mockResolvedValue({ ref: attachment, data: Uint8Array.of(1, 2, 3) }),
+    } as unknown as AttachmentStore
+    const wire = await serializeMessagesWithImages([createUserMessage({
+      content: [{ type: 'text', text: 'describe ' }, { type: 'image', attachment }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })], attachments, () => Promise.resolve({ type: 'file', file_id: 'file-1' }))
+    expect(wire).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'describe ' },
+        { type: 'text', text: `[Image attachment id=${JSON.stringify(String(attachment.attachmentId))} size=1x1 media_type="image/png"]` },
+        { type: 'file', file_id: 'file-1' },
+      ],
+    }])
   })
 
   it('emits an empty user message rather than dropping block-less messages', () => {

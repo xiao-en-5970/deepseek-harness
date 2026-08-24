@@ -9,7 +9,8 @@
 
 import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import type { WireMessage, WireRequest, WireTool } from './types.ts'
+import type { AttachmentStore, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type { WireMessage, WireRequest, WireTool, WireUserContentPart } from './types.ts'
 
 /** Adapter-level request defaults (from plugin config). */
 export interface RequestDefaults {
@@ -65,6 +66,40 @@ function assertTextOnly(blocks: readonly ContentBlock[]): void {
   if (contentHasImage(blocks)) {
     throw new LlmError('The DeepSeek chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')
   }
+}
+
+/** Resolve one durable image into the representation selected by the adapter. */
+export type SerializeImage = (
+  stored: StoredImageAttachment,
+  signal?: AbortSignal,
+) => Promise<Extract<WireUserContentPart, { type: 'file' | 'image_url' }>>
+
+async function contentParts(
+  blocks: readonly ContentBlock[],
+  attachments: AttachmentStore,
+  serializeImage: SerializeImage,
+  signal?: AbortSignal,
+): Promise<WireUserContentPart[]> {
+  const parts: WireUserContentPart[] = []
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      if (block.text.length > 0) parts.push({ type: 'text', text: block.text })
+    } else if (block.type === 'image') {
+      const stored = await attachments.readImage(block.attachment, signal)
+      parts.push({
+        type: 'text',
+        text: `[Image attachment id=${JSON.stringify(String(stored.ref.attachmentId))} size=${stored.ref.width}x${stored.ref.height} media_type=${JSON.stringify(stored.ref.mediaType)}]`,
+      })
+      parts.push(await serializeImage(stored, signal))
+    }
+  }
+  return parts
+}
+
+function userContent(parts: readonly WireUserContentPart[]): string | WireUserContentPart[] {
+  return parts.every(part => part.type === 'text')
+    ? parts.map(part => (part as { type: 'text'; text: string }).text).join('')
+    : [...parts]
 }
 
 /** Serialize one assistant message (text + reasoning + tool calls). */
@@ -140,6 +175,41 @@ export function serializeMessages(messages: Message[]): WireMessage[] {
   return wire
 }
 
+/** Serialize image-capable history without putting attachment bytes into durable messages. */
+export async function serializeMessagesWithImages(
+  messages: readonly Message[],
+  attachments: AttachmentStore,
+  serializeImage: SerializeImage,
+  signal?: AbortSignal,
+): Promise<WireMessage[]> {
+  const wire: WireMessage[] = []
+  for (const message of messages) {
+    if (message.role === 'system') {
+      assertTextOnly(message.content)
+      wire.push({ role: 'system', content: flattenText(message.content) })
+      continue
+    }
+    if (message.role === 'assistant') {
+      assertTextOnly(message.content)
+      wire.push(serializeAssistant(message))
+      continue
+    }
+    const regular = message.content.filter(block => block.type !== 'tool-result')
+    const toolResults = message.content.filter((block): block is Extract<ContentBlock, { type: 'tool-result' }> => block.type === 'tool-result')
+    const content = userContent(await contentParts(regular, attachments, serializeImage, signal))
+    if (content.length > 0 || toolResults.length === 0) wire.push({ role: 'user', content })
+    for (const result of toolResults) {
+      const parts = await contentParts(result.content, attachments, serializeImage, signal)
+      const text = parts.filter((part): part is Extract<WireUserContentPart, { type: 'text' }> => part.type === 'text')
+        .map(part => part.text).join('')
+      const images = parts.filter((part): part is Exclude<WireUserContentPart, { type: 'text' }> => part.type !== 'text')
+      wire.push({ role: 'tool', tool_call_id: result.toolCallId, content: text || '(no output)' })
+      if (images.length > 0) wire.push({ role: 'user', content: [{ type: 'text', text: 'Attached image(s) from tool result:' }, ...images] })
+    }
+  }
+  return wire
+}
+
 /**
  * Build the full wire request. Always streaming (`stream: true`, usage
  * reporting on); optional fields are omitted rather than sent as null, so
@@ -184,4 +254,17 @@ export function serializeRequest(
     ...options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens },
     ...options.stop !== undefined ? { stop: options.stop } : {},
   }
+}
+
+/** Build a request after resolving durable images for a vision-capable model. */
+export async function serializeRequestWithImages(
+  options: GenerateOptions,
+  attachments: AttachmentStore,
+  serializeImage: SerializeImage,
+  defaults: RequestDefaults = {},
+): Promise<WireRequest> {
+  const request = serializeRequest({ ...options, messages: [] }, defaults)
+  if (options.system !== undefined) request.messages.push({ role: 'system', content: options.system })
+  request.messages.push(...await serializeMessagesWithImages(options.messages, attachments, serializeImage, options.signal))
+  return request
 }

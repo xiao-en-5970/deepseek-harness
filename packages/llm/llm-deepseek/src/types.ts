@@ -35,10 +35,30 @@ export interface WireSystemMessage {
   content: string
 }
 
-/** User-role message: a single string of user input. */
+/** Text part inside a multimodal user message. */
+export interface WireTextContentPart {
+  type: 'text'
+  text: string
+}
+
+/** Provider file reference inside a multimodal user message. */
+export interface WireFileContentPart {
+  type: 'file'
+  file_id: string
+}
+
+/** Inline image fallback inside a multimodal user message. */
+export interface WireImageUrlContentPart {
+  type: 'image_url'
+  image_url: { url: string }
+}
+
+export type WireUserContentPart = WireTextContentPart | WireFileContentPart | WireImageUrlContentPart
+
+/** User-role message: compact text or ordered multimodal input. */
 export interface WireUserMessage {
   role: 'user'
-  content: string
+  content: string | WireUserContentPart[]
 }
 
 /** Tool-role message: the result of one tool call, keyed by its call id. */
