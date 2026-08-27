@@ -1228,6 +1228,36 @@ export type Config = Readonly<Record<string, never>>
 
 来源：[`packages/llm/llm-retry/src/index.ts:24`](../packages/llm/llm-retry/src/index.ts)
 
+<a id="deepseek-aidsh-llm-zcode"></a>
+
+## `@deepseek-ai/dsh-llm-zcode`
+
+需要：`agents` · `credentials` · `llm` · `subprocess`
+
+```ts config-catalog
+/** ZCode executable, provider endpoint, credential, and model defaults. */
+export interface Config {
+  /** ZCode CLI command or absolute executable path. */
+  command?: string
+  /** Harness credential reference containing the provider API key. */
+  apiKeyEnv?: string
+  /** OpenAI-compatible endpoint used by ZCode. */
+  baseURL?: string
+  /** Optional persistent ZCode state directory. */
+  dataDir?: string
+  /** Model offered when no explicit model is selected. */
+  defaultModel?: string
+  /** Context window reported to Harness and ZCode. */
+  contextWindow?: number
+  /** Maximum output token count reported to Harness and ZCode. */
+  maxOutputTokens?: number
+  /** Native ZCode permission mode. */
+  mode?: 'build' | 'edit' | 'plan' | 'yolo'
+}
+```
+
+来源：[`packages/llm/llm-zcode/src/index.ts:24`](../packages/llm/llm-zcode/src/index.ts)
+
 <a id="deepseek-aidsh-lsp-stdio"></a>
 
 ## `@deepseek-ai/dsh-lsp-stdio`

@@ -1,0 +1,8 @@
+# ZCode owns its complete agent loop and tool catalog. This Harness preset must
+# remain tool-free so an app-server tool call cannot execute a second time.
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: You are using ZCode as the coding agent for workspace {{cwd}}.
+    complete: true
+    includeRuntimeContext: false
