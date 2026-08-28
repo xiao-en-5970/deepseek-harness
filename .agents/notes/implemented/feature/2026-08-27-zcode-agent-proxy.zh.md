@@ -18,6 +18,8 @@ Status: implemented
 
 主页提供唯一的 DSH/ZCode 引擎切换。两个引擎使用同一套工作区注册表和文件，但各自只列出并打开自己的会话。切回时，会恢复当前工作区内该引擎最近使用的会话。浏览器把选择记录在 history state 中，不提供 URL 切换。`zcode` preset 作为内部组装细节拥有 ZCode 路由：主页不注册 Agent preset chip 或标题标签，设置会过滤 `zcode`，独立的模型选择器则读取当前会话自己的模型目录。
 
+该目录在 API 边界按引擎隔离。DSH 会话排除 `zcode` provider，但保留 `zai` 等普通 GLM route；ZCode 会话只展示 ZCode provider 的 GLM 模型。跨引擎选模和发起对话都会被拒绝，ZCode 选模也不会覆盖已保存的 DSH 默认模型。
+
 ## 备选方案
 
 - **通过既有 Harness 循环使用 GLM** —— 被否决，因为它只更换模型，并未更换 Agent 产品。

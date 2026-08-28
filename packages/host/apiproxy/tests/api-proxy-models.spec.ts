@@ -135,6 +135,52 @@ function registerImageBridge(ctx: Context): void {
 }
 
 describe('Web session model selection', () => {
+  it('keeps DSH and ZCode model routes in their owning engine', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    ctx.llm.registerAdapter(['zcode'], new CatalogAdapter('ZCode Agent', [
+      { provider: 'zcode', id: 'glm-5', name: 'glm-5' },
+      { provider: 'zcode', id: 'glm-5.3-flash', name: 'glm-5.3-flash' },
+      { provider: 'zcode', id: 'glm-5.3', name: 'glm-5.3' },
+    ]))
+    const saved: unknown[] = []
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'zcode', model: 'glm-5' }),
+      saveDefaultModelSelection: (selection) => { saved.push(selection); return Promise.resolve() },
+      cwd: '/tmp',
+    })
+
+    const dsh = expectValue(await api.sessions.models(request({ sessionId })))
+    expect(dsh.groups.map(group => group.id)).not.toContain('zcode')
+    expect(dsh.routable).toBe(false)
+    Object.assign(agent, { followup: vi.fn() })
+    expect((await api.sessions.prompt(request({
+      sessionId, mode: 'queue' as const, content: [{ type: 'text' as const, text: 'hi' }],
+    }))).result).toMatchObject({ ok: false, error: { code: 'model-unavailable' } })
+    expect((await api.sessions.selectModel(request({
+      sessionId, provider: 'zcode', model: 'glm-5.3',
+    }))).result).toMatchObject({ ok: false, error: { code: 'model-unavailable' } })
+
+    agent.session.append('agent-preset/selected', { agentPreset: 'zcode' })
+    const zcode = expectValue(await api.sessions.models(request({ sessionId })))
+    expect(zcode.groups).toEqual([{
+      id: 'zcode',
+      name: 'ZCode Agent',
+      models: [
+        { id: 'glm-5', name: 'glm-5' },
+        { id: 'glm-5.3-flash', name: 'glm-5.3-flash' },
+        { id: 'glm-5.3', name: 'glm-5.3' },
+      ],
+    }])
+    expect((await api.sessions.selectModel(request({
+      sessionId, provider: 'deepseek-official', model: 'deepseek-chat',
+    }))).result).toMatchObject({ ok: false, error: { code: 'model-unavailable' } })
+    expectValue(await api.sessions.selectModel(request({
+      sessionId, provider: 'zcode', model: 'glm-5.3',
+    })))
+    expect(saved).toEqual([])
+    await ctx.fiber.dispose()
+  })
+
   it('validates an ordered image batch before persisting any member', async () => {
     const { ctx, agent, sessionId } = await harness()
     const validateImage = vi.fn((_input: { data: Uint8Array }) => Promise.resolve())

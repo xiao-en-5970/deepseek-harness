@@ -332,51 +332,52 @@ function ok<T>(request: RpcRequest<unknown>, value: T): RpcResponse<T> {
  * owning catalog stops advertising it. Per-provider failures ride `failures`
  * without failing the sound groups; groups that advertise nothing are dropped.
  */
-async function buildModelCatalog(ctx: Context): Promise<{
-  groups: ModelProviderGroup[]
-  failures: ModelCatalogFailure[]
-}> {
-  const catalog = await Promise.all(ctx.llm.listProviders().map(async (provider) => {
-    try {
-      const models = await ctx.llm.listModels(provider.id)
-      const entries = await Promise.all(models.map(async (model) => {
-        const resolved = await ctx.llm.resolveModelInfo(provider.id, model.id)
-        const reasoning: ModelReasoning | undefined = resolved.reasoning === undefined
-          ? undefined
-          : {
-            efforts: resolved.reasoning.efforts.map(effort => ({
-              id: effort.id,
-              name: effort.name,
-              ...effort.description === undefined
+async function buildModelCatalog(
+  ctx: Context,
+  includeProvider: (provider: string) => boolean = () => true,
+): Promise<{ groups: ModelProviderGroup[]; failures: ModelCatalogFailure[] }> {
+  const catalog = await Promise.all(ctx.llm.listProviders()
+    .filter(provider => includeProvider(provider.id)).map(async (provider) => {
+      try {
+        const models = await ctx.llm.listModels(provider.id)
+        const entries = await Promise.all(models.map(async (model) => {
+          const resolved = await ctx.llm.resolveModelInfo(provider.id, model.id)
+          const reasoning: ModelReasoning | undefined = resolved.reasoning === undefined
+            ? undefined
+            : {
+              efforts: resolved.reasoning.efforts.map(effort => ({
+                id: effort.id,
+                name: effort.name,
+                ...effort.description === undefined
+                  ? {}
+                  : { description: effort.description },
+              })),
+              ...resolved.reasoning.defaultEffort === undefined
                 ? {}
-                : { description: effort.description },
-            })),
-            ...resolved.reasoning.defaultEffort === undefined
-              ? {}
-              : { defaultEffort: resolved.reasoning.defaultEffort },
+                : { defaultEffort: resolved.reasoning.defaultEffort },
+            }
+          return {
+            id: model.id,
+            name: model.name,
+            ...model.description === undefined ? {} : { description: model.description },
+            ...reasoning === undefined ? {} : { reasoning },
           }
-        return {
-          id: model.id,
-          name: model.name,
-          ...model.description === undefined ? {} : { description: model.description },
-          ...reasoning === undefined ? {} : { reasoning },
+        }))
+        const group: ModelProviderGroup = {
+          id: provider.id,
+          name: provider.name,
+          models: entries,
         }
-      }))
-      const group: ModelProviderGroup = {
-        id: provider.id,
-        name: provider.name,
-        models: entries,
+        return { kind: 'group' as const, group }
+      } catch (error: unknown) {
+        const failure: ModelCatalogFailure = {
+          id: provider.id,
+          name: provider.name,
+          message: error instanceof Error ? error.message : String(error),
+        }
+        return { kind: 'failure' as const, failure }
       }
-      return { kind: 'group' as const, group }
-    } catch (error: unknown) {
-      const failure: ModelCatalogFailure = {
-        id: provider.id,
-        name: provider.name,
-        message: error instanceof Error ? error.message : String(error),
-      }
-      return { kind: 'failure' as const, failure }
-    }
-  }))
+    }))
   return {
     groups: catalog.flatMap(item => item.kind === 'group' ? [item.group] : []).filter(group => group.models.length > 0),
     failures: catalog.flatMap(item => item.kind === 'failure' ? [item.failure] : []),
@@ -1864,6 +1865,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return llm === undefined || llm.listProviders().some(entry => entry.id === provider)
   }
 
+  /** ZCode owns its provider; every other provider belongs to the DSH agent loop. */
+  function routeAllowedFor(agent: Agent, provider: string): boolean {
+    return resolveSessionPreset(agent.session) === 'zcode' ? provider === 'zcode' : provider !== 'zcode'
+  }
+
   /**
    * Resolve the addressed agent for a turn-starting method and refuse when no
    * adapter serves its current selection: a provider nothing serves cannot start a
@@ -1880,11 +1886,15 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     if ('error' in found) return { refused: err(request, found.error) }
     const agent = found.agent
     const selection = selectionFor(agent).current
-    if (!routeServed(selection.provider)) {
+    const served = routeServed(selection.provider)
+    const allowed = routeAllowedFor(agent, selection.provider)
+    if (!served || !allowed) {
       return {
         refused: err(request, {
           code: 'model-unavailable',
-          message: `no adapter serves provider "${selection.provider}"; select a model for this session`,
+          message: allowed
+            ? `no adapter serves provider "${selection.provider}"; select a model for this session`
+            : `provider "${selection.provider}" belongs to the other agent engine; select a model for this session`,
           details: { provider: selection.provider, model: selection.model },
         }),
       }
@@ -2300,8 +2310,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const found = await agentFor(sessionId)
         if ('error' in found) return err(request, found.error)
         const current = selectionFor(found.agent).current
-        const { groups, failures } = await buildModelCatalog(ctx)
-        const routable = routeServed(current.provider)
+        const { groups, failures } = await buildModelCatalog(
+          ctx, provider => routeAllowedFor(found.agent, provider),
+        )
+        const routable = routeServed(current.provider) && routeAllowedFor(found.agent, current.provider)
         return ok(request, { current: { ...current }, routable, groups, failures })
       },
 
@@ -2318,6 +2330,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
                 ? {}
                 : { reasoningEffort: ReasoningEffortId(reasoningEffort) },
             })
+            if (!routeAllowedFor(found.agent, resolved.provider)) {
+              return err(request, {
+                code: 'model-unavailable',
+                message: `provider "${resolved.provider}" belongs to the other agent engine`,
+                details: { provider, model },
+              })
+            }
             const pendingImage = [...found.agent.inbox.nextTurn, ...found.agent.inbox.nextStep]
               .some(message => contentHasImage(message.content))
             if (pendingImage || messagesHaveImage(found.agent.session.deriveMessages())) {
@@ -2339,12 +2358,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
                 : { reasoningEffort: resolved.reasoningEffort },
             }
             selectionFor(found.agent).current = selected
-            try {
-              await defaults.saveDefaultModelSelection?.(selected)
-            } catch (error: unknown) {
-              ctx.logger.warn(
-                `api-proxy: the model switch applies to this session but was not saved as the default: ${String(error)}`,
-              )
+            if (resolveSessionPreset(found.agent.session) !== 'zcode') {
+              try {
+                await defaults.saveDefaultModelSelection?.(selected)
+              } catch (error: unknown) {
+                ctx.logger.warn(
+                  `api-proxy: the model switch applies to this session but was not saved as the default: ${String(error)}`,
+                )
+              }
             }
             return ok(request, { selected: { ...selected } })
           } catch (error: unknown) {
