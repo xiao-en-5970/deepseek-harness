@@ -8,7 +8,7 @@
 
 配置 `zcode` 提供方时，需要已安装的 `zcode` 命令、OpenAI 兼容端点和凭据引用。其他预设会暴露 Harness 工具，因此会被拒绝。省略 `dataDir` 时，适配器会在该标识符隔离的 `DSH_HOME` 下提供状态路径；只有选中的工作区目录与 Harness 共享。
 
-模型选择器提供 `glm-5`、`glm-5.3-flash` 和 `glm-5.3`。随附的 ZCode 预设初始使用 `glm-5`；`defaultModel` 仍作为提供方的回退模型。
+模型选择器提供 `glm-5.3-flash` 和 `glm-5.3`。随附的 ZCode 预设初始使用 `glm-5.3-flash`；`defaultModel` 仍作为提供方的回退模型。其他模型 ID 会在启动 ZCode 前以 `UNKNOWN_MODEL` 失败。
 
 ```yaml
 - id: llm-zcode

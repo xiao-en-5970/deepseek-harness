@@ -8,7 +8,7 @@ Use the shipped `ZCode 代理` preset. The selected Harness session maps to a st
 
 Configure the `zcode` provider with an installed `zcode` command, an OpenAI-compatible endpoint, and a credential reference. Other presets expose Harness tools and are rejected. When `dataDir` is omitted, the adapter supplies a state path below the identifier's isolated `DSH_HOME`; only the selected workspace directory is shared with Harness.
 
-The model selector offers `glm-5`, `glm-5.3-flash`, and `glm-5.3`. The shipped ZCode preset starts with `glm-5`; `defaultModel` remains the provider fallback.
+The model selector offers `glm-5.3-flash` and `glm-5.3`. The shipped ZCode preset starts with `glm-5.3-flash`; `defaultModel` remains the provider fallback. Other model ids fail with `UNKNOWN_MODEL` before ZCode starts.
 
 ```yaml
 - id: llm-zcode

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-27-zcode-agent-proxy.md
-2026-08-27-zcode-agent-proxy.md: 7a2e38bbf72cccd6cd8f18cfbdb5ef759ae14ed4
-2026-08-27-zcode-agent-proxy.zh.md: f87014d38489d96d2cbff416fab74f68f4388a7b
+2026-08-27-zcode-agent-proxy.md: d2a02d8081fb1a7f617aa1c0eeb492e41d48492b
+2026-08-27-zcode-agent-proxy.zh.md: 838df19e517c35ba872e63ecd63fa721cf6d47e4

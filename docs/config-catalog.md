@@ -1254,7 +1254,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/llm/llm-zcode/src/index.ts:24`](../packages/llm/llm-zcode/src/index.ts)
+Source: [`packages/llm/llm-zcode/src/index.ts:25`](../packages/llm/llm-zcode/src/index.ts)
 
 <a id="deepseek-aidsh-lsp-stdio"></a>
 

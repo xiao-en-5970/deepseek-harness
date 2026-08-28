@@ -74,10 +74,10 @@ describe('reading display metadata', () => {
   })
 
   it('reads and renders a preferred model route', async () => {
-    const route = { provider: 'zcode', model: 'glm-5' }
+    const route = { provider: 'zcode', model: 'glm-5.3-flash' }
     const rendered = renderPresetMetadata({ route })
 
-    expect(rendered).toBe('route:\n  provider: zcode\n  model: glm-5\n')
+    expect(rendered).toBe('route:\n  provider: zcode\n  model: glm-5.3-flash\n')
     expect(await readPresetMetadata(await presetDir(rendered))).toEqual({ route })
   })
 

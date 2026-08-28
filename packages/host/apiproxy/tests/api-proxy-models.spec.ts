@@ -138,13 +138,12 @@ describe('Web session model selection', () => {
   it('keeps DSH and ZCode model routes in their owning engine', async () => {
     const { ctx, agent, sessionId } = await harness()
     ctx.llm.registerAdapter(['zcode'], new CatalogAdapter('ZCode Agent', [
-      { provider: 'zcode', id: 'glm-5', name: 'glm-5' },
       { provider: 'zcode', id: 'glm-5.3-flash', name: 'glm-5.3-flash' },
       { provider: 'zcode', id: 'glm-5.3', name: 'glm-5.3' },
     ]))
     const saved: unknown[] = []
     const api = createApiProxy(ctx, {
-      defaultModelSelection: () => ({ provider: 'zcode', model: 'glm-5' }),
+      defaultModelSelection: () => ({ provider: 'zcode', model: 'glm-5.3-flash' }),
       saveDefaultModelSelection: (selection) => { saved.push(selection); return Promise.resolve() },
       cwd: '/tmp',
     })
@@ -166,7 +165,6 @@ describe('Web session model selection', () => {
       id: 'zcode',
       name: 'ZCode Agent',
       models: [
-        { id: 'glm-5', name: 'glm-5' },
         { id: 'glm-5.3-flash', name: 'glm-5.3-flash' },
         { id: 'glm-5.3', name: 'glm-5.3' },
       ],

@@ -372,13 +372,13 @@ describe('agentPreset.select', () => {
 
   it('selects a preset-owned model route and restores the previous route when leaving', async () => {
     const { api } = await harness(['standard', 'zcode'], undefined, {
-      routes: { zcode: { provider: 'zcode', model: 'glm-5' } },
+      routes: { zcode: { provider: 'zcode', model: 'glm-5.3-flash' } },
     })
     await api.sessions.create(request({ sessionId: SessionId('sel-route'), agentPreset: 'standard' }))
 
     await api.agentPresets.select(request({ sessionId: SessionId('sel-route'), agentPreset: 'zcode' }))
     const selected = await api.sessions.models(request({ sessionId: SessionId('sel-route') }))
-    expect(selected.result.ok && selected.result.value.current).toEqual({ provider: 'zcode', model: 'glm-5' })
+    expect(selected.result.ok && selected.result.value.current).toEqual({ provider: 'zcode', model: 'glm-5.3-flash' })
 
     await api.agentPresets.select(request({ sessionId: SessionId('sel-route'), agentPreset: 'standard' }))
     const restored = await api.sessions.models(request({ sessionId: SessionId('sel-route') }))

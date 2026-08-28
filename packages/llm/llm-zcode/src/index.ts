@@ -11,6 +11,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
+import { assertZCodeModel, ZCODE_MODELS } from './models.ts'
 import { ZCodeWire, type ZCodeEvent } from './wire.ts'
 
 export { ZCodeWire } from './wire.ts'
@@ -40,8 +41,6 @@ export interface Config {
   mode?: 'build' | 'edit' | 'plan' | 'yolo'
 }
 
-const MODELS = ['glm-5', 'glm-5.3-flash', 'glm-5.3'] as const
-
 type ResolvedConfig = Required<Omit<Config, 'dataDir'>> & { dataDir: string | undefined }
 
 export const Config: z<Config> = z.object({
@@ -49,7 +48,7 @@ export const Config: z<Config> = z.object({
   apiKeyEnv: z.string().role('credential-ref').default('ZAI_API_KEY'),
   baseURL: z.string().default('https://open.bigmodel.cn/api/paas/v4'),
   dataDir: z.string(),
-  defaultModel: z.string().default('glm-5'),
+  defaultModel: z.string().default('glm-5.3-flash'),
   contextWindow: z.number().step(1).min(1).default(202_752),
   maxOutputTokens: z.number().step(1).min(1).default(65_536),
   mode: z.union(['build', 'edit', 'plan', 'yolo']).default('yolo'),
@@ -151,10 +150,11 @@ class ZCodeAdapter extends LlmAdapter {
   }
 
   override listModels(): Promise<readonly LlmModelInfo[]> {
-    return Promise.resolve(MODELS.map(id => ({ provider: PROVIDER, id, name: id, inputModalities: ['text'] })))
+    return Promise.resolve(ZCODE_MODELS.map(id => ({ provider: PROVIDER, id, name: id, inputModalities: ['text'] })))
   }
 
   override resolveModel(_provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    assertZCodeModel(model)
     const config = this.current()
     return Promise.resolve({
       provider: PROVIDER,
@@ -271,7 +271,7 @@ function resolved(config: Config): ResolvedConfig {
     command: config.command ?? 'zcode',
     apiKeyEnv: config.apiKeyEnv ?? 'ZAI_API_KEY',
     baseURL: config.baseURL ?? 'https://open.bigmodel.cn/api/paas/v4',
-    defaultModel: config.defaultModel ?? 'glm-5',
+    defaultModel: config.defaultModel ?? 'glm-5.3-flash',
     contextWindow: config.contextWindow ?? 202_752,
     maxOutputTokens: config.maxOutputTokens ?? 65_536,
     mode: config.mode ?? 'yolo',

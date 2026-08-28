@@ -18,7 +18,7 @@ Workspace files are shared intentionally; histories and agent state are not. Ten
 
 The homepage exposes the only DSH/ZCode engine switch. Both engines use the same workspace registry and files, but each lists and opens only its own sessions. Switching back restores the latest session for that engine in the current workspace. The browser records the choice in history state without a URL switch. The `zcode` preset owns the ZCode route as an internal composition detail: the homepage registers no Agent-preset chip or header label, settings filters `zcode`, and the independent model selector reads the active session's own model directory.
 
-That directory is engine-scoped at the API boundary. DSH sessions exclude the `zcode` provider while retaining ordinary GLM routes such as `zai`; ZCode sessions expose only the ZCode provider's GLM models. Cross-engine selections and prompts are rejected, and a ZCode model selection never overwrites the saved DSH default.
+That directory is engine-scoped at the API boundary. DSH sessions exclude the `zcode` provider while retaining ordinary GLM routes such as `zai`; ZCode sessions expose only `glm-5.3-flash` and `glm-5.3` from the ZCode provider. Cross-engine selections and prompts are rejected, unsupported ZCode model IDs fail before process startup, and a ZCode model selection never overwrites the saved DSH default.
 
 ## Alternatives considered
 
