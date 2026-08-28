@@ -16,11 +16,11 @@ export type HarnessModeToggleProps = PropsRuntime<'sidebar.footer.action'> & Har
 export function HarnessModeToggle({ wide, switchMode }: HarnessModeToggleProps) {
   const mode = useSyncExternalStore(subscribeHarnessMode, currentHarnessMode, () => 'standard')
   const next = mode === 'zcode' ? 'standard' : 'zcode'
-  const label = mode === 'zcode' ? '切回标准 Harness' : '切换 ZCode 模式'
+  const label = mode === 'zcode' ? '切换到 DSH' : '切换到 ZCode'
   return (
     <button type="button" className={css.toggle} aria-label={label} onClick={() => { switchMode(next) }}>
       <span className={css.mark}>{mode === 'zcode' ? 'Z' : 'D'}</span>
-      {wide && <span>{mode === 'zcode' ? 'ZCode 模式' : '标准 Harness'}</span>}
+      {wide && <span>{mode === 'zcode' ? 'ZCode' : 'DSH'}</span>}
     </button>
   )
 }

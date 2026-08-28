@@ -137,6 +137,7 @@ function fakeApi(
 function seed(): Map<string, FakePreset> {
   return new Map<string, FakePreset>([
     ['standard', { trust: 'system', content: '- id: tool-bash\n', name: '标准模式' }],
+    ['zcode', { trust: 'system', content: '- id: llm-zcode\n', name: 'ZCode 代理' }],
     ['mine', { trust: 'user', content: '- id: tool-read\n' }],
   ])
 }

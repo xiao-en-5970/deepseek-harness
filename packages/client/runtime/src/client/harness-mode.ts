@@ -1,7 +1,7 @@
-/** Browser-local shell mode. The URL keeps refresh/back behavior explicit without touching tenant data. */
+/** Browser-local shell mode. History state preserves reloads without exposing a second URL switch. */
 export type HarnessMode = 'standard' | 'zcode'
 
-const MODE_PARAM = 'agent'
+const MODE_STATE = 'dshHarnessMode'
 const MODE_EVENT = 'dsh:harness-mode'
 
 /**
@@ -15,38 +15,35 @@ export function matchesHarnessMode(agentPreset: string | undefined, mode: Harnes
 }
 
 /**
- * Current shell mode; absence keeps the ordinary Harness experience.
- * @returns mode encoded in the current URL.
+ * Current shell mode; absence keeps the DSH experience.
+ * @returns mode recorded by the homepage switch.
  */
 export function currentHarnessMode(): HarnessMode {
   if (typeof window === 'undefined') return 'standard'
-  return new URL(window.location.href).searchParams.get(MODE_PARAM) === 'zcode' ? 'zcode' : 'standard'
+  const state: unknown = window.history.state
+  return state !== null && typeof state === 'object'
+    && Reflect.get(state, MODE_STATE) === 'zcode' ? 'zcode' : 'standard'
 }
 
 /**
- * Subscribe to mode changes made by the toggle or browser navigation.
- * @param listener - callback invoked after the URL mode changes.
+ * Subscribe to mode changes made by the homepage toggle.
+ * @param listener - callback invoked after the homepage choice changes.
  * @returns subscription disposer.
  */
 export function subscribeHarnessMode(listener: () => void): () => void {
   if (typeof window === 'undefined') return () => {}
   window.addEventListener(MODE_EVENT, listener)
-  window.addEventListener('popstate', listener)
-  return () => {
-    window.removeEventListener(MODE_EVENT, listener)
-    window.removeEventListener('popstate', listener)
-  }
+  return () => { window.removeEventListener(MODE_EVENT, listener) }
 }
 
 /**
- * Replace the current URL's mode marker and notify mounted views.
- * @param mode - mode to encode in the current URL.
+ * Record a homepage-toggle choice without changing the visible URL.
+ * @param mode - mode selected by the homepage button.
  */
 export function publishHarnessMode(mode: HarnessMode): void {
   if (typeof window === 'undefined') return
-  const url = new URL(window.location.href)
-  if (mode === 'zcode') url.searchParams.set(MODE_PARAM, 'zcode')
-  else url.searchParams.delete(MODE_PARAM)
-  window.history.replaceState(window.history.state, '', url)
+  const state: unknown = window.history.state
+  const previous = state !== null && typeof state === 'object' ? state : {}
+  window.history.replaceState({ ...previous, [MODE_STATE]: mode }, '', window.location.href)
   window.dispatchEvent(new Event(MODE_EVENT))
 }

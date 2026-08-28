@@ -10,18 +10,23 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import { createSnapshotStore, publishHarnessMode } from '@deepseek-ai/dsh-client-runtime/client'
 import { AgentPresetLabel } from '../src/client/AgentPresetLabel.tsx'
 import type { AgentPresetLabelProps } from '../src/client/AgentPresetLabel.tsx'
 import { AgentPresetRow } from '../src/client/AgentPresetRow.tsx'
 import type { AgentPresetRowProps } from '../src/client/AgentPresetRow.tsx'
 import { AgentPresetSeat } from '../src/client/AgentPresetSeat.tsx'
 import type { AgentPresetSeatProps } from '../src/client/AgentPresetSeat.tsx'
+import { HarnessModeToggle } from '../src/client/HarnessModeToggle.tsx'
+import type { HarnessModeToggleProps } from '../src/client/HarnessModeToggle.tsx'
 import type { AgentPresetSettingsState } from '../src/client/settings-store.ts'
 import type { AgentPresetSeatState } from '../src/client/seat-store.ts'
 import { en } from '../src/client/locales.ts'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  window.history.replaceState(null, '', '/')
+})
 
 const ROW_READY: AgentPresetSettingsState = {
   status: 'ready',
@@ -89,6 +94,20 @@ function renderLabel(
   } as unknown as AgentPresetLabelProps)} />)
   return { load, view }
 }
+
+describe('the homepage harness switch', () => {
+  it('shows DSH and ZCode as engines without presenting a model or preset choice', () => {
+    const switchMode = vi.fn()
+    render(<HarnessModeToggle {...({ wide: true, switchMode } as unknown as HarnessModeToggleProps)} />)
+
+    expect(screen.getByRole('button', { name: '切换到 ZCode' }).textContent).toContain('DSH')
+    fireEvent.click(screen.getByRole('button'))
+    expect(switchMode).toHaveBeenCalledWith('zcode')
+
+    act(() => { publishHarnessMode('zcode') })
+    expect(screen.getByRole('button', { name: '切换到 DSH' }).textContent).toContain('ZCode')
+  })
+})
 
 describe('the General-settings row', () => {
   it('reads the roster once and shows the current default', async () => {
@@ -402,4 +421,5 @@ describe('the session-header label', () => {
     expect(absent.load).not.toHaveBeenCalled()
     expect(unknown.load).not.toHaveBeenCalled()
   })
+
 })

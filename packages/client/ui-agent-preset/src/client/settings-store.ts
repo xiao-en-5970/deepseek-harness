@@ -87,6 +87,15 @@ export interface RosterValue {
   hasDocument: boolean
 }
 
+/**
+ * Keep engine routing out of Agent-preset controls; the homepage switch owns ZCode.
+ * @param presets - complete Host roster.
+ * @returns presets configurable inside DSH.
+ */
+export function configurablePresets<T extends { id: string }>(presets: readonly T[]): T[] {
+  return presets.filter(preset => preset.id !== 'zcode')
+}
+
 /** The roster, or the message to show in its place. */
 export type RosterRead = { ok: true; value: RosterValue } | { ok: false; error: string }
 
@@ -153,7 +162,7 @@ export async function beginRosterRead<S extends { status: string; error: string 
 export function presetOptions(
   presets: readonly { id: string; trust: 'system' | 'user'; name?: string; description?: string; broken?: string }[],
 ): AgentPresetOption[] {
-  return presets.filter(preset => preset.broken === undefined).map(preset => ({
+  return configurablePresets(presets).filter(preset => preset.broken === undefined).map(preset => ({
     id: preset.id,
     trust: preset.trust,
     ...preset.name === undefined ? {} : { name: preset.name },
@@ -206,7 +215,7 @@ export class AgentPresetSettingsController {
   async load(): Promise<void> {
     const roster = await beginRosterRead(this.api, this.store)
     if (roster === undefined) return
-    const { presets } = roster
+    const presets = configurablePresets(roster.presets)
     const [first] = presets
     if (first === undefined) {
       this.set({ status: 'unavailable', options: [], currentValue: '' })

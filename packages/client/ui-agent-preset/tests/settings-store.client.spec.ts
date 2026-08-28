@@ -76,6 +76,7 @@ describe('the agent-preset settings controller', () => {
   it('derives options and the current default from one roster call', async () => {
     const controller = new AgentPresetSettingsController(fakeApi([
       { id: 'standard', trust: 'system', isDefault: true },
+      { id: 'zcode', trust: 'system', isDefault: false },
       { id: 'mine', trust: 'user', isDefault: false },
     ]))
 
@@ -264,6 +265,7 @@ describe('the new-session chip controller', () => {
 
   const ROSTER: { id: string; trust: 'system' | 'user'; isDefault: boolean }[] = [
     { id: 'standard', trust: 'system', isDefault: true },
+    { id: 'zcode', trust: 'system', isDefault: false },
     { id: 'minimal', trust: 'system', isDefault: false },
   ]
 
@@ -289,6 +291,20 @@ describe('the new-session chip controller', () => {
     // Settings can name a preset that was since deleted; the chip still has
     // to open on something rather than render nothing.
     expect(controller.store.getSnapshot().current).toBe('minimal')
+  })
+
+  it('never offers the homepage-owned ZCode engine as an Agent preset', async () => {
+    const controller = chip([
+      { id: 'zcode', trust: 'system', isDefault: true },
+      { id: 'standard', trust: 'system', isDefault: false },
+    ], undefined)
+
+    await controller.load()
+
+    expect(controller.store.getSnapshot()).toMatchObject({
+      current: 'standard',
+      options: [{ id: 'standard', trust: 'system' }],
+    })
   })
 
   it('carries the display metadata into the menu rows', async () => {
