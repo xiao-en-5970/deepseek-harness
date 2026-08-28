@@ -40,6 +40,8 @@ export interface Config {
   mode?: 'build' | 'edit' | 'plan' | 'yolo'
 }
 
+const MODELS = ['glm-5', 'glm-5.3-flash', 'glm-5.3'] as const
+
 type ResolvedConfig = Required<Omit<Config, 'dataDir'>> & { dataDir: string | undefined }
 
 export const Config: z<Config> = z.object({
@@ -149,8 +151,7 @@ class ZCodeAdapter extends LlmAdapter {
   }
 
   override listModels(): Promise<readonly LlmModelInfo[]> {
-    const config = this.current()
-    return Promise.resolve([{ provider: PROVIDER, id: config.defaultModel, name: config.defaultModel, inputModalities: ['text'] }])
+    return Promise.resolve(MODELS.map(id => ({ provider: PROVIDER, id, name: id, inputModalities: ['text'] })))
   }
 
   override resolveModel(_provider: string, model: string): Promise<LlmResolvedModelInfo> {
