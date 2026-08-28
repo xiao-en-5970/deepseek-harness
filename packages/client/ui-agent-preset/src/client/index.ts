@@ -68,61 +68,63 @@ export function apply(ctx: ClientContext): void {
     void controller.load()
     for (const read of rosterReaders) read()
   })
-  const remembered = new Map<HarnessMode, string>()
-  const presetFor = (mode: HarnessMode): string => mode === 'zcode' ? 'zcode' : 'standard'
-  const navigateMode = (mode: HarnessMode, updateUrl = true): void => {
-    const sessions = ctx.sessions.list.getSnapshot()
-    const workspaces = ctx.workspaces.list.getSnapshot()
-    const current = sessions.current
-    if (current !== undefined) {
-      const summary = sessions.byId[current]
-      remembered.set(summary?.agentPreset === 'zcode' ? 'zcode' : 'standard', current)
-    }
-    const workspace = current === undefined
-      ? workspaces.items.find(item => item.workspaceId === workspaces.recentWorkspaceId)
-      : workspaces.items.find(item => item.sessionIds.includes(current))
-    ctx.workspaces.setSessionCreatePreset(presetFor(mode))
-    ctx.sessions.clear()
-    if (workspace !== undefined) {
-      const archived = new Set(workspaces.archivedSessionIds)
-      const rememberedId = remembered.get(mode)
-      const candidates = workspace.sessionIds
-        .map(id => sessions.byId[id])
-        .filter((summary): summary is NonNullable<typeof summary> => summary !== undefined
-          && !archived.has(summary.id) && matchesHarnessMode(summary.agentPreset, mode))
-        .sort((left, right) => right.updatedAt - left.updatedAt)
-      const target = candidates.find(summary => summary.id === rememberedId) ?? candidates[0]
-      if (target !== undefined) ctx.sessions.open(target.id)
-      else ctx.workspaces.startSession(workspace.workspaceId)
-    }
-    if (updateUrl) publishHarnessMode(mode)
-  }
-
-  ctx.effect(() => {
-    if (typeof window === 'undefined') return () => {}
-    const reconcile = (): void => {
-      const mode = currentHarnessMode()
-      ctx.workspaces.setSessionCreatePreset(presetFor(mode))
-      const sessions = ctx.sessions.list.getSnapshot()
+  ctx.inject(['sessions', 'workspaces'], (scope: ClientContext) => {
+    const remembered = new Map<HarnessMode, string>()
+    const presetFor = (mode: HarnessMode): string => mode === 'zcode' ? 'zcode' : 'standard'
+    const navigateMode = (mode: HarnessMode, updateUrl = true): void => {
+      const sessions = scope.sessions.list.getSnapshot()
+      const workspaces = scope.workspaces.list.getSnapshot()
       const current = sessions.current
-      if (current !== undefined && !matchesHarnessMode(sessions.byId[current]?.agentPreset, mode)
-        && ctx.workspaces.list.getSnapshot().baselinesReady) navigateMode(mode, false)
+      if (current !== undefined) {
+        const summary = sessions.byId[current]
+        remembered.set(summary?.agentPreset === 'zcode' ? 'zcode' : 'standard', current)
+      }
+      const workspace = current === undefined
+        ? workspaces.items.find(item => item.workspaceId === workspaces.recentWorkspaceId)
+        : workspaces.items.find(item => item.sessionIds.includes(current))
+      scope.workspaces.setSessionCreatePreset(presetFor(mode))
+      scope.sessions.clear()
+      if (workspace !== undefined) {
+        const archived = new Set(workspaces.archivedSessionIds)
+        const rememberedId = remembered.get(mode)
+        const candidates = workspace.sessionIds
+          .map(id => sessions.byId[id])
+          .filter((summary): summary is NonNullable<typeof summary> => summary !== undefined
+            && !archived.has(summary.id) && matchesHarnessMode(summary.agentPreset, mode))
+          .sort((left, right) => right.updatedAt - left.updatedAt)
+        const target = candidates.find(summary => summary.id === rememberedId) ?? candidates[0]
+        if (target !== undefined) scope.sessions.open(target.id)
+        else scope.workspaces.startSession(workspace.workspaceId)
+      }
+      if (updateUrl) publishHarnessMode(mode)
     }
-    const disposers = [
-      subscribeHarnessMode(reconcile),
-      ctx.sessions.list.subscribe(reconcile),
-      ctx.workspaces.list.subscribe(reconcile),
-    ]
-    reconcile()
-    return () => { for (const dispose of disposers) dispose() }
-  }, 'ui-agent-preset: mode-aware session creation')
 
-  ctx.effect(() => ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-    name: 'sidebar.footer.action',
-    id: 'harness-mode',
-    order: -20,
-    inject: (): HarnessModeToggleInjected => ({ switchMode: navigateMode }),
-  }, HarnessModeToggle)), 'ui-agent-preset: Harness/ZCode mode switch')
+    scope.effect(() => {
+      if (typeof window === 'undefined') return () => {}
+      const reconcile = (): void => {
+        const mode = currentHarnessMode()
+        scope.workspaces.setSessionCreatePreset(presetFor(mode))
+        const sessions = scope.sessions.list.getSnapshot()
+        const current = sessions.current
+        if (current !== undefined && !matchesHarnessMode(sessions.byId[current]?.agentPreset, mode)
+          && scope.workspaces.list.getSnapshot().baselinesReady) navigateMode(mode, false)
+      }
+      const disposers = [
+        subscribeHarnessMode(reconcile),
+        scope.sessions.list.subscribe(reconcile),
+        scope.workspaces.list.subscribe(reconcile),
+      ]
+      reconcile()
+      return () => { for (const dispose of disposers) dispose() }
+    }, 'ui-agent-preset: mode-aware session creation')
+
+    scope.effect(() => scope.slots.inject('sidebar.footer.action', () => scope.slots.register({
+      name: 'sidebar.footer.action',
+      id: 'harness-mode',
+      order: -20,
+      inject: (): HarnessModeToggleInjected => ({ switchMode: navigateMode }),
+    }, HarnessModeToggle)), 'ui-agent-preset: Harness/ZCode mode switch')
+  })
 
   ctx.effect(() => ctx.locale.register('settings.agentPreset', { zh, en }), 'ui-agent-preset: settings row dictionaries')
 

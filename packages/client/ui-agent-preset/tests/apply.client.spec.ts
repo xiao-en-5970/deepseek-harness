@@ -181,6 +181,17 @@ describe('ui-agent-preset apply', () => {
     expect(inject).toEqual(['slots', 'locale', 'connection', 'remote'])
   })
 
+  it('waits for session services before starting browser mode coordination', async () => {
+    vi.stubGlobal('window', {})
+    try {
+      const { ctx, slots } = await bench()
+      declareRoot(slots)
+      await ctx.plugin({ inject: [...inject], apply }).await()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('registers the General row and the settings section', async () => {
     const { ctx, slots } = await bench()
     declareRoot(slots)
