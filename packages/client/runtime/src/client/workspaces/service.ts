@@ -54,8 +54,10 @@ export class WorkspaceRuntime implements IWorkspaces {
   readonly list: SnapshotStore<WorkspaceListState>
   /** Workspace baseline and frame owner. */
   private readonly manager: WorkspaceManager
-  /** In-flight blank-session creates keyed by workspace (connectWorkspace coalescing). */
-  private readonly connecting = new Map<WorkspaceId, Promise<SessionId>>()
+  /** In-flight blank-session creates keyed by workspace and requested preset. */
+  private readonly connecting = new Map<string, Promise<SessionId>>()
+  /** Preset required by the next Workspace connect/new-session flow. */
+  private sessionCreatePreset: string | undefined
   /** Guards the runtime-owned one-shot initial-selection subscription. */
   private initialSelectionStarted = false
 
@@ -93,7 +95,8 @@ export class WorkspaceRuntime implements IWorkspaces {
     // Coalesce concurrent connects: a create's summary lands without cwd
     // until the host frame arrives, so a second call inside that window
     // would miss the reuse scan and mint another hidden blank session.
-    const inflight = this.connecting.get(workspaceId)
+    const connectingKey = `${workspaceId}\0${this.sessionCreatePreset ?? ''}`
+    const inflight = this.connecting.get(connectingKey)
     if (inflight !== undefined) return inflight
     // Reuse requires workspace membership (id in sessionIds AND same
     // canonical cwd — the host's own membership rule), never cwd alone:
@@ -108,12 +111,20 @@ export class WorkspaceRuntime implements IWorkspaces {
       const summary = sessions.byId[id]
       if (summary !== undefined && summary.blank && summary.cwd === workspace.path
         && workspace.sessionIds.includes(summary.id)
+        && (this.sessionCreatePreset === undefined || summary.agentPreset === this.sessionCreatePreset)
         && !archived.includes(summary.id)) return summary.id
     }
-    const attempt = this.sessions.create({ workspaceId })
-      .finally(() => { this.connecting.delete(workspaceId) })
-    this.connecting.set(workspaceId, attempt)
+    const attempt = this.sessions.create({
+      workspaceId,
+      ...this.sessionCreatePreset === undefined ? {} : { agentPreset: this.sessionCreatePreset },
+    }).finally(() => { this.connecting.delete(connectingKey) })
+    this.connecting.set(connectingKey, attempt)
     return attempt
+  }
+
+  /** Select the preset used when Workspace flows create or reuse a blank session. */
+  setSessionCreatePreset(agentPreset?: string): void {
+    this.sessionCreatePreset = agentPreset
   }
 
   /**

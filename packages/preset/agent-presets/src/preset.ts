@@ -31,6 +31,8 @@ export interface AgentPreset {
   readonly description?: string
   /** Declared position within its group; absent sorts after those that declare one. */
   readonly order?: number
+  /** Model route selected while this preset owns a blank session. */
+  readonly route?: { readonly provider: string; readonly model: string }
   /**
    * Why this preset cannot compose a session, absent when it can. A broken
    * preset stays on the roster — hiding it would leave its directory blocking

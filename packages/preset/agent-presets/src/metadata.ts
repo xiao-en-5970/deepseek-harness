@@ -1,5 +1,5 @@
 /**
- * A preset's display metadata: the name and description a picker shows.
+ * A preset's metadata: picker text plus an optional preferred model route.
  *
  * It lives in its own file because the composition is a top-level list of
  * plugin rows — YAML cannot carry sibling keys beside it, and faking a
@@ -7,7 +7,7 @@
  * also keeps the composition exactly what its name says: a Cordis file the
  * loader owns and the cordis preset can author.
  *
- * The file carries display text ONLY. `id` is the directory name and `trust`
+ * `id` is the directory name and `trust`
  * comes from the root a preset was discovered under, so neither is writable
  * here — otherwise a locally authored preset could claim to be a shipped one.
  *
@@ -36,6 +36,8 @@ export interface PresetMetadata {
    * can read in capability order while authored ones stay alphabetical.
    */
   readonly order?: number
+  /** Model route selected while this preset owns a blank session. */
+  readonly route?: { readonly provider: string; readonly model: string }
 }
 
 /** A non-empty trimmed string, or undefined for anything else. */
@@ -77,10 +79,17 @@ export async function readPresetMetadata(directory: string): Promise<PresetMetad
   const order = typeof record.order === 'number' && Number.isFinite(record.order)
     ? record.order
     : undefined
+  const routeRecord = typeof record.route === 'object' && record.route !== null && !Array.isArray(record.route)
+    ? record.route as Record<string, unknown>
+    : undefined
+  const provider = text(routeRecord?.provider)
+  const model = text(routeRecord?.model)
+  const route = provider === undefined || model === undefined ? undefined : { provider, model }
   return {
     ...name === undefined ? {} : { name },
     ...description === undefined ? {} : { description },
     ...order === undefined ? {} : { order },
+    ...route === undefined ? {} : { route },
   }
 }
 
@@ -96,10 +105,14 @@ export function renderPresetMetadata(metadata: PresetMetadata): string | undefin
   const name = text(metadata.name)
   const description = text(metadata.description)
   const { order } = metadata
-  if (name === undefined && description === undefined && order === undefined) return undefined
+  const provider = text(metadata.route?.provider)
+  const model = text(metadata.route?.model)
+  const route = provider === undefined || model === undefined ? undefined : { provider, model }
+  if (name === undefined && description === undefined && order === undefined && route === undefined) return undefined
   return yaml.dump({
     ...name === undefined ? {} : { name },
     ...description === undefined ? {} : { description },
     ...order === undefined ? {} : { order },
+    ...route === undefined ? {} : { route },
   }, { lineWidth: -1 })
 }

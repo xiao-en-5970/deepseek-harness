@@ -17,6 +17,7 @@ export interface SessionsPortSummary {
   blank: boolean
   cwd?: string
   updatedAt: number
+  agentPreset?: string
 }
 
 /** Session-list facts sibling domains read: readiness, selection, and the row map. */
@@ -36,7 +37,7 @@ export interface SessionsPort {
    * @param opts - target workspace.
    * @returns the new session id.
    */
-  create(opts: { workspaceId: WorkspaceId }): Promise<SessionId>
+  create(opts: { workspaceId: WorkspaceId; agentPreset?: string }): Promise<SessionId>
   /**
    * Select a session as current.
    * @param id - session id (must exist in the list store).

@@ -295,6 +295,34 @@ describe('WorkspaceRuntime', () => {
     expect(api.callsOf('session.create')).toEqual([])
   })
 
+  it('keeps blank-session reuse and creation inside the selected preset', async () => {
+    const ctx = new Context()
+    const api = new FakeApiClient()
+    const sessions = new SessionRuntime(ctx, api, fakeRemote())
+    const workspaces = new WorkspaceRuntime(ctx, api, sessions)
+    api.onWorkspaceList = () => Promise.resolve(ok({
+      items: [workspace('alpha', [sid('standard-blank'), sid('zcode-blank')])] as never[],
+    }))
+    api.onList = () => Promise.resolve(ok({ items: [
+      { sessionId: sid('standard-blank'), updatedAt: 1, running: false, blank: true, cwd: '/w/alpha', agentPreset: 'standard' },
+      { sessionId: sid('zcode-blank'), updatedAt: 2, running: false, blank: true, cwd: '/w/alpha', agentPreset: 'zcode' },
+    ] as never[] }))
+    await Promise.all([workspaces.refresh(), sessions.refresh()])
+    await Promise.resolve()
+
+    workspaces.setSessionCreatePreset('zcode')
+    await expect(workspaces.connectWorkspace(wid('alpha'))).resolves.toBe('zcode-blank')
+
+    workspaces.setSessionCreatePreset('standard')
+    await expect(workspaces.connectWorkspace(wid('alpha'))).resolves.toBe('standard-blank')
+
+    api.onCreate = () => Promise.resolve(ok({ sessionId: sid('zcode-fresh') }))
+    workspaces.setSessionCreatePreset('zcode')
+    await workspaces.archiveSession(sid('zcode-blank'))
+    await expect(workspaces.connectWorkspace(wid('alpha'))).resolves.toBe('zcode-fresh')
+    expect(api.callsOf('session.create')).toContainEqual({ workspaceId: 'alpha', agentPreset: 'zcode' })
+  })
+
   it('returns created Workspaces and preserves Host business errors', async () => {
     const ctx = new Context()
     const api = new FakeApiClient()

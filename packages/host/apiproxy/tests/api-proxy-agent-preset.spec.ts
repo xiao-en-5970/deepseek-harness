@@ -39,10 +39,16 @@ function stubAgent(session: Session): Agent {
  * `apps/cli`. Ids listed in `userIds` present as locally authored; the rest
  * ship with the deployment.
  */
-function roster(ids: readonly string[], userIds: readonly string[] = []): unknown {
+function roster(
+  ids: readonly string[],
+  userIds: readonly string[] = [],
+  routes: Readonly<Record<string, { provider: string; model: string }>> = {},
+): unknown {
   const trustOf = (id: string): 'system' | 'user' => (userIds.includes(id) ? 'user' : 'system')
-  const presetOf = (id: string): object =>
-    ({ id, trust: trustOf(id), path: `/presets/${id}/agent.cordis.yml` })
+  const presetOf = (id: string): object => ({
+    id, trust: trustOf(id), path: `/presets/${id}/agent.cordis.yml`,
+    ...routes[id] === undefined ? {} : { route: routes[id] },
+  })
   return {
     defaultId: ids[0],
     list: () => Promise.resolve(ids.map(presetOf)),
@@ -73,7 +79,7 @@ function roster(ids: readonly string[], userIds: readonly string[] = []): unknow
     },
     recompose: (_ctx: Context, id: string) => {
       if (!ids.includes(id)) return Promise.reject(new UnknownPresetError(id, ids))
-      return Promise.resolve({ id, trust: 'system', path: `/presets/${id}.yml` })
+      return Promise.resolve(presetOf(id))
     },
     // The standing scope key a cold transcript read resolves presenters in.
     standingKeyFor: (id?: string) => {
@@ -104,7 +110,11 @@ const services = new Map<string, Record<string, unknown>>()
 async function harness(
   presets?: readonly string[],
   persistence?: unknown,
-  options: { userIds?: readonly string[]; defaults?: Record<string, unknown> } = {},
+  options: {
+    userIds?: readonly string[]
+    defaults?: Record<string, unknown>
+    routes?: Readonly<Record<string, { provider: string; model: string }>>
+  } = {},
 ) {
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-apiproxy-preset-')))
   const ctx = new Context()
@@ -112,7 +122,13 @@ async function harness(
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(UserQuestionService)
   ctx.provide('sessionPersistence', (persistence ?? { list: () => Promise.resolve([]) }) as never)
-  if (presets !== undefined) ctx.provide('agentPresets', roster(presets, options.userIds) as never)
+  if (presets !== undefined) ctx.provide('agentPresets', roster(presets, options.userIds, options.routes) as never)
+  if (options.routes !== undefined) {
+    ctx.provide('llm', {
+      resolveCallConfig: (route: { provider: string; model: string }) => Promise.resolve(route),
+      listProviders: () => [],
+    } as never)
+  }
 
   const factory: AgentFactory = {
     async createAgent(_ownerCtx, options) {
@@ -352,6 +368,21 @@ describe('agentPreset.select', () => {
     expect(response.result.ok).toBe(true)
     if (!response.result.ok) throw new Error('unreachable')
     expect(response.result.value.agentPreset).toBe('minimal')
+  })
+
+  it('selects a preset-owned model route and restores the previous route when leaving', async () => {
+    const { api } = await harness(['standard', 'zcode'], undefined, {
+      routes: { zcode: { provider: 'zcode', model: 'glm-5' } },
+    })
+    await api.sessions.create(request({ sessionId: SessionId('sel-route'), agentPreset: 'standard' }))
+
+    await api.agentPresets.select(request({ sessionId: SessionId('sel-route'), agentPreset: 'zcode' }))
+    const selected = await api.sessions.models(request({ sessionId: SessionId('sel-route') }))
+    expect(selected.result.ok && selected.result.value.current).toEqual({ provider: 'zcode', model: 'glm-5' })
+
+    await api.agentPresets.select(request({ sessionId: SessionId('sel-route'), agentPreset: 'standard' }))
+    const restored = await api.sessions.models(request({ sessionId: SessionId('sel-route') }))
+    expect(restored.result.ok && restored.result.value.current).toEqual({ provider: 'test', model: 'test-model' })
   })
 
   it('records the switch in the log, and the list reads it back', async () => {

@@ -1,3 +1,6 @@
 name: ZCode 代理
 description: 将整轮对话交给 ZCode Agent 执行，Harness 仅展示推理和结果。
 order: 4
+route:
+  provider: zcode
+  model: glm-5

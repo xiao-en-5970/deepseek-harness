@@ -9,7 +9,7 @@
  * menu in between; the flow and its error dialog live in WorkspacePicker
  * (same package — direct composition, no slot between them).
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import {
   Button, IconCloseFill14, IconPersonalizationOutline16,
@@ -17,6 +17,9 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   SessionId, SessionListState, SessionSearchResultItem, WorkspaceId, WorkspaceView,
+} from '@deepseek-ai/dsh-client-runtime/client'
+import {
+  currentHarnessMode, matchesHarnessMode, subscribeHarnessMode, type HarnessMode,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { WorkspaceBrowserProps } from './contract/slots.ts'
 import type { SessionNode, SessionOrderBy } from './tree.ts'
@@ -37,6 +40,36 @@ const SEARCH_DEBOUNCE_MS = 250
 const SEARCH_QUERY_MAX_CODE_UNITS = 500
 /** Session rows visible per Workspace before the local overflow control. */
 const COLLAPSED_SESSION_LIMIT = 5
+
+/** Keep the workspace registry shared while projecting only this shell mode's conversations. */
+function sessionsForMode(list: SessionListState, mode: HarnessMode): SessionListState {
+  const visible = (id: SessionId): boolean => {
+    return matchesHarnessMode(list.byId[id]?.agentPreset, mode)
+  }
+  const ids = list.ids.filter(visible)
+  const byId = Object.fromEntries(ids.map(id => [id, list.byId[id]])) as SessionListState['byId']
+  return {
+    ...list,
+    ids,
+    byId,
+    current: list.current !== undefined && visible(list.current) ? list.current : undefined,
+  }
+}
+
+/** Memoized selector-hook adapter so useSyncExternalStore never sees a synthetic snapshot churn. */
+function filteredSessionsHook(
+  source: WorkspaceBrowserProps['useSessions'], mode: HarnessMode,
+): WorkspaceBrowserProps['useSessions'] {
+  let previous: SessionListState | undefined
+  let filtered: SessionListState | undefined
+  return selector => source((state) => {
+    if (state !== previous) {
+      previous = state
+      filtered = sessionsForMode(state, mode)
+    }
+    return selector(filtered as SessionListState)
+  })
+}
 
 /** Keep controlled input and RPC payload inside the session.search wire contract. */
 function sanitizeSearchQuery(value: string): string {
@@ -761,6 +794,8 @@ export function WorkspaceBrowser({
   renderSlot,
   t,
 }: WorkspaceBrowserProps) {
+  const mode = useSyncExternalStore<HarnessMode>(subscribeHarnessMode, currentHarnessMode, () => 'standard')
+  const visibleSessions = useMemo(() => filteredSessionsHook(useSessions, mode), [useSessions, mode])
   const workspaces = useWorkspaces(state => state.items)
   const workspacePhase = useWorkspaces(state => state.phase)
   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
@@ -1109,7 +1144,7 @@ export function WorkspaceBrowser({
         {wide && (normalizedQuery !== ''
           ? (
             <SearchResults
-              useSessions={useSessions}
+              useSessions={visibleSessions}
               open={open}
               workspaces={workspaces}
               archivedSessionIds={archivedSessionIds}
@@ -1122,7 +1157,7 @@ export function WorkspaceBrowser({
           : groupBy === 'flat'
             ? (
               <FlatList
-                useSessions={useSessions} open={open} forkSession={forkSession}
+                useSessions={visibleSessions} open={open} forkSession={forkSession}
                 onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
                 archivedSessionIds={archivedSessionIds}
                 orderBy={orderBy}
@@ -1135,7 +1170,7 @@ export function WorkspaceBrowser({
             )
             : (
               <SessionTree
-                useSessions={useSessions}
+                useSessions={visibleSessions}
                 onSessionRename={onSessionRename}
                 onSessionArchive={onSessionArchive}
                 forkSession={forkSession}

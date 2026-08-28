@@ -153,6 +153,7 @@ export async function copyComposition(
     const rendered = renderPresetMetadata({
       ...name === undefined ? {} : { name },
       ...source.description === undefined ? {} : { description: source.description },
+      ...source.route === undefined ? {} : { route: source.route },
     })
     const metadataPath = join(dir, METADATA_FILE)
     if (rendered === undefined) {

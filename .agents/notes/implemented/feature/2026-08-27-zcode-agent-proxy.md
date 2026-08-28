@@ -16,6 +16,8 @@ The shipped `ZCode 代理` preset contains no Harness tools. The adapter rejects
 
 Workspace files are shared intentionally; histories and agent state are not. Tenant isolation still comes from the existing per-identifier workspace and `DSH_HOME` boundaries.
 
+The sidebar exposes a Harness/ZCode mode switch. Both modes use the same workspace registry and files, but each mode lists and opens only its own sessions. Switching back restores the latest session for that mode in the current workspace. The `zcode` preset owns the `zcode/glm-5` route, so selecting the preset or creating a ZCode session cannot silently keep the previous Harness model.
+
 ## Alternatives considered
 
 - **Use GLM through the existing Harness loop** — rejected because it changes only the model, not the agent product.
@@ -28,4 +30,4 @@ ZCode must be installed in the deployment and the configured credential must exi
 
 ## Testing
 
-The wire test pins request framing, reverse runtime-preference handling, responses, and streaming events. A live sandbox run additionally proves that the official ZCode process completes a Harness turn and creates a file in the identifier's shared workspace.
+The wire test pins request framing, reverse runtime-preference handling, responses, and streaming events. Preset and client-runtime tests pin route ownership, mode-specific blank-session reuse, and URL mode state. A live sandbox run additionally proves that the official ZCode process completes a Harness turn and creates a file in the identifier's shared workspace.

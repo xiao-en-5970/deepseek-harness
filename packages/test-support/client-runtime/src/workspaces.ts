@@ -63,6 +63,12 @@ export class TestWorkspaces implements IWorkspaces {
     return `session-of-${workspaceId}` as SessionId
   }
 
+  /** Select the preset used by later workspace-backed session creation. */
+  setSessionCreatePreset(agentPreset?: string): void {
+    this.calls.push({ method: 'setSessionCreatePreset', args: [agentPreset] })
+    this.stubs.get('setSessionCreatePreset')?.(agentPreset)
+  }
+
   /**
    * New-session flow (recorded; stubbed behavior runs when installed).
    * @param workspaceId - optional explicit workspace target.

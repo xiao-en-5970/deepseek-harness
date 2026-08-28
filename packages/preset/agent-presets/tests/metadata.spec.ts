@@ -73,6 +73,14 @@ describe('reading display metadata', () => {
     expect(await readPresetMetadata(dir)).toEqual({ name: '标准模式', order: 1 })
   })
 
+  it('reads and renders a preferred model route', async () => {
+    const route = { provider: 'zcode', model: 'glm-5' }
+    const rendered = renderPresetMetadata({ route })
+
+    expect(rendered).toBe('route:\n  provider: zcode\n  model: glm-5\n')
+    expect(await readPresetMetadata(await presetDir(rendered))).toEqual({ route })
+  })
+
   it('ignores an order that is not a finite number', async () => {
     expect(await readPresetMetadata(await presetDir('order: first\n'))).toEqual({})
     expect(await readPresetMetadata(await presetDir('order: .inf\n'))).toEqual({})

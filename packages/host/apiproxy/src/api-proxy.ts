@@ -34,6 +34,7 @@ import {
   SETTINGS_NAMESPACE as AGENT_PRESET_SETTINGS_NAMESPACE, UnknownPresetError,
 } from '@deepseek-ai/dsh-agent-presets'
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPreset } from '@deepseek-ai/dsh-agent-presets/src/preset.ts'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {
   ApiProxy, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
@@ -1121,6 +1122,8 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   }
   type WebModelSelectionRef = ModelSelectionRef & { current: ModelSelection }
   const selections = new WeakMap<Agent, WebModelSelectionRef>()
+  /** Model to restore when a blank Agent leaves a preset-owned route. */
+  const presetRouteFallbacks = new WeakMap<Agent, ModelSelection>()
   /**
    * Serializes `agentPreset.select` per session. Two concurrent selects both
    * pass the blank check, and the second `unmountPresetFor` then finds nothing
@@ -1186,6 +1189,17 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return selection
   }
 
+  /** Resolve a preset's optional route through the same adapter validation as session.selectModel. */
+  async function modelSelectionFor(route: AgentPreset['route']): Promise<ModelSelection | undefined> {
+    if (route === undefined) return undefined
+    const resolved = await ctx.llm.resolveCallConfig(route)
+    return {
+      provider: resolved.provider,
+      model: resolved.model,
+      ...resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort },
+    }
+  }
+
   /** Pre-publication setup used by both fresh and resumed Web agents. */
   function installSelection(agentCtx: Context): void {
     const agent = agentCtx.agent
@@ -1243,12 +1257,18 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         },
       }
     }
-    const resolvedId = (await presets.resolve(presetId)).id
+    const preset = await presets.resolve(presetId)
+    const presetSelection = await modelSelectionFor(preset.route)
     return {
-      agentPreset: resolvedId,
+      agentPreset: preset.id,
       setup: async (agentCtx: Context) => {
         installSelection(agentCtx)
-        await presets.mount(agentCtx, resolvedId)
+        await presets.mount(agentCtx, preset.id)
+        const agent = agentCtx.agent
+        if (agent === undefined || presetSelection === undefined || agent.session.requestHeader() !== undefined) return
+        const selection = selectionFor(agent)
+        presetRouteFallbacks.set(agent, { ...selection.current })
+        selection.current = presetSelection
       },
     }
   }
@@ -3280,7 +3300,22 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             })
           }
           try {
+            const target = await presets.resolve(agentPreset)
+            const targetSelection = await modelSelectionFor(target.route)
             const preset = await presets.recompose(agent.ctx, agentPreset)
+            const selection = selectionFor(agent)
+            if (targetSelection === undefined) {
+              const fallback = presetRouteFallbacks.get(agent)
+              if (fallback !== undefined) {
+                selection.current = fallback
+                presetRouteFallbacks.delete(agent)
+              }
+            } else {
+              if (!presetRouteFallbacks.has(agent)) {
+                presetRouteFallbacks.set(agent, { ...selection.current })
+              }
+              selection.current = targetSelection
+            }
             // Recorded only after the swap committed: the log states what the
             // agent runs, and a rejected mount leaves the previous composition.
             agent.session.append('agent-preset/selected', { agentPreset: preset.id })

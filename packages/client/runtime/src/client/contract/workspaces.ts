@@ -24,6 +24,8 @@ export interface IWorkspaces {
    * @returns the connected session id.
    */
   connectWorkspace(workspaceId: WorkspaceId): Promise<SessionId>
+  /** Set the preset used by subsequent Workspace connect/new-session flows. */
+  setSessionCreatePreset(agentPreset?: string): void
   /**
    * The New Session flow: connect the explicit, current-Session, or recent
    * Workspace and open the resulting session; failures surface on the session
